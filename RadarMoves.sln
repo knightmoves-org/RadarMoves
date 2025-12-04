@@ -2,9 +2,11 @@
 # Visual Studio Version 16
 VisualStudioVersion = 16.0.0.0
 MinimumVisualStudioVersion = 16.0.0.0
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "RadarMoves", "RadarMoves\RadarMoves.csproj", "{BA071CC2-8C83-4639-9913-11923C0F08B0}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "RadarMoves.Server", "RadarMoves.Server\RadarMoves.Server.csproj", "{BA071CC2-8C83-4639-9913-11923C0F08B0}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "RadarMoves.Client", "RadarMoves.Client\RadarMoves.Client.csproj", "{64AAA4D6-CF73-406C-8B21-58E81C769437}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "RadarMoves.Shared", "RadarMoves.Shared\RadarMoves.Shared.csproj", "{64AAA4D6-CF73-406C-8B21-58E81C769437}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

@@ -1,0 +1,277 @@
+@page "/state"
+@rendermode InteractiveWebAssembly
+@using Microsoft.AspNetCore.SignalR.Client
+@inject NavigationManager Navigation
+@inject IJSRuntime JSRuntime
+@implements IAsyncDisposable
+@using RadarMoves.Shared
+
+<PageTitle>State</PageTitle>
+
+<div class="state-container">
+    <div class="info-panel">
+        <h3>Connected Users: @_otherUsers.Count</h3>
+        <div class="user-list">
+            @foreach (var user in _otherUsers.Values)
+            {
+                <div class="user-item" style="color: @GetUserColor(user.UserId)">
+                    <span>@user.UserName</span>
+                    <span class="cursor-position">(@user.MouseX, @user.MouseY)</span>
+                </div>
+            }
+        </div>
+        @if (!string.IsNullOrEmpty(_connectionState))
+        {
+            <div class="connection-status">Status: @_connectionState</div>
+        }
+    </div>
+
+    <div class="canvas-container">
+        <svg @ref="_svgElement" @onmousemove="HandleMouseMove" @onmouseleave="HandleMouseLeave" class="radar-canvas"
+            width="@_svgWidth" height="@_svgHeight">
+            <!-- Background grid for reference -->
+            <defs>
+                <pattern id="grid" width="50" height="50" patternUnits="userSpaceOnUse">
+                    <path d="M 50 0 L 0 0 0 50" fill="none" stroke="#e0e0e0" stroke-width="1" />
+                </pattern>
+            </defs>
+            <rect width="100%" height="100%" fill="url(#grid)" />
+
+            <!-- Center point marker -->
+            <circle cx="400" cy="300" r="5" fill="#666" />
+            <text x="400" y="290" text-anchor="middle" fill="#666" font-size="12">Center</text>
+
+            <!-- Display other users' cursors -->
+            @foreach (var user in _otherUsers.Values)
+            {
+                <g>
+                    <circle cx="@user.MouseX" cy="@user.MouseY" r="8" fill="@GetUserColor(user.UserId)" opacity="0.7"
+                        stroke="white" stroke-width="2" />
+                    <text x="@user.MouseX" y="@(user.MouseY - 15)" text-anchor="middle" fill="@GetUserColor(user.UserId)"
+                        font-size="12" font-weight="bold">
+                        @user.UserName
+                    </text>
+                </g>
+            }
+
+            <!-- Current user's cursor (always visible) -->
+            <g>
+                <circle cx="@_currentMouseX" cy="@_currentMouseY" r="10" fill="@GetUserColor(_userId)" opacity="0.8"
+                    stroke="black" stroke-width="2" />
+                <text x="@_currentMouseX" y="@(_currentMouseY - 18)" text-anchor="middle" fill="@GetUserColor(_userId)"
+                    font-size="12" font-weight="bold">
+                    @_userName (You)
+                </text>
+            </g>
+        </svg>
+    </div>
+</div>
+
+@code {
+    private HubConnection? _hubConnection;
+    private Dictionary<string, UserState> _otherUsers = new();
+    private string _userId = Guid.NewGuid().ToString();
+    private string _userName = "User";
+    static private double _svgWidth = 800;
+    static private double _svgHeight = 600;
+    private double _currentMouseX = _svgWidth / 2;
+    private double _currentMouseY = _svgHeight / 2;
+    private string _connectionState = "Connecting...";
+    private ElementReference _svgElement;
+    private System.Threading.Timer? _updateTimer;
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Generate a random user name
+        _userName = $"User_{Random.Shared.Next(1000, 9999)}";
+
+        _hubConnection = new HubConnectionBuilder()
+        .WithUrl(Navigation.ToAbsoluteUri("/stateHub"))
+        .Build();
+
+        _hubConnection.On<RadarMoves.Shared.State>("SetState", (state) =>
+        {
+            // Don't update if it's our own state
+            if (state.UserState != null && state.UserState.UserId != _userId)
+            {
+                _otherUsers[state.UserState.UserId] = state.UserState;
+                InvokeAsync(StateHasChanged);
+            }
+        });
+
+        _hubConnection.Closed += async (error) =>
+        {
+            _connectionState = "Disconnected";
+            await InvokeAsync(StateHasChanged);
+            await Task.Delay(Random.Shared.Next(0, 5) * 1000);
+            await StartConnection();
+        };
+
+        await StartConnection();
+
+        // Set up a timer to periodically send position updates
+        _updateTimer = new System.Threading.Timer(async _ => await SendPositionUpdate(), null, TimeSpan.Zero,
+        TimeSpan.FromMilliseconds(50));
+    }
+
+    private async Task StartConnection()
+    {
+        if (_hubConnection?.State == HubConnectionState.Disconnected)
+        {
+            try
+            {
+                await _hubConnection.StartAsync();
+                _connectionState = "Connected";
+                await InvokeAsync(StateHasChanged);
+            }
+            catch (Exception ex)
+            {
+                _connectionState = $"Error: {ex.Message}";
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+    }
+
+    private async Task HandleMouseMove(Microsoft.AspNetCore.Components.Web.MouseEventArgs e)
+    {
+        // Clamp to SVG bounds
+        _currentMouseX = Math.Max(0, Math.Min(_svgWidth, (int)e.OffsetX));
+        _currentMouseY = Math.Max(0, Math.Min(_svgHeight, (int)e.OffsetY));
+
+        await SendPositionUpdate();
+        StateHasChanged();
+    }
+
+    private Task HandleMouseLeave()
+    {
+        // Optionally handle mouse leave - could send a "cursor hidden" state
+        return Task.CompletedTask;
+    }
+
+    private async Task SendPositionUpdate()
+    {
+        if (_hubConnection?.State == HubConnectionState.Connected)
+        {
+            try
+            {
+                var state = new RadarMoves.Shared.State
+                {
+                    UserState = new RadarMoves.Shared.UserState
+                    {
+                        UserId = _userId,
+                        UserName = _userName,
+                        MouseX = (int)_currentMouseX,
+                        MouseY = (int)_currentMouseY
+                    }
+                };
+
+                await _hubConnection.SendAsync("SetState", state);
+            }
+            catch (Exception ex)
+            {
+                // Handle error silently or log it
+                Console.WriteLine($"Error sending position: {ex.Message}");
+            }
+        }
+    }
+
+    private string GetUserColor(string userId)
+    {
+        // Generate a consistent color based on user ID
+        var hash = userId.GetHashCode();
+        var r = (byte)((hash & 0xFF0000) >> 16);
+        var g = (byte)((hash & 0x00FF00) >> 8);
+        var b = (byte)(hash & 0x0000FF);
+
+        // Ensure minimum brightness
+        r = (byte)Math.Max(100, (int)r);
+        g = (byte)Math.Max(100, (int)g);
+        b = (byte)Math.Max(100, (int)b);
+
+        return $"rgb({r}, {g}, {b})";
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _updateTimer?.Dispose();
+
+        if (_hubConnection is not null)
+        {
+            await _hubConnection.DisposeAsync();
+        }
+    }
+
+    private class ClientRect
+    {
+        public double Left { get; set; }
+        public double Top { get; set; }
+    }
+}
+
+<style>
+    .state-container {
+        display: flex;
+        gap: 20px;
+        padding: 20px;
+        height: 100vh;
+    }
+
+    .info-panel {
+        width: 250px;
+        padding: 15px;
+        background-color: #f5f5f5;
+        border-radius: 8px;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    }
+
+    .info-panel h3 {
+        margin-top: 0;
+        margin-bottom: 15px;
+        color: #333;
+    }
+
+    .user-list {
+        margin-bottom: 15px;
+    }
+
+    .user-item {
+        padding: 8px;
+        margin-bottom: 5px;
+        background-color: white;
+        border-radius: 4px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+
+    .cursor-position {
+        font-size: 0.9em;
+        color: #666;
+    }
+
+    .connection-status {
+        padding: 8px;
+        background-color: #e3f2fd;
+        border-radius: 4px;
+        font-size: 0.9em;
+        color: #1976d2;
+    }
+
+    .canvas-container {
+        flex: 1;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        background-color: white;
+        border-radius: 8px;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        padding: 20px;
+    }
+
+    .radar-canvas {
+        border: 2px solid #ddd;
+        border-radius: 4px;
+        background-color: #fafafa;
+        cursor: crosshair;
+    }
+</style>

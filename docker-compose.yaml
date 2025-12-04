@@ -1,0 +1,40 @@
+services:
+  redis:
+    image: redis:latest
+    container_name: radar-moves-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes
+    networks:
+      - radar-moves-network
+
+  radar-moves-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: radar-moves-app
+    ports:
+      - "8080:8080"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ConnectionStrings__RedisConnection=redis:6379
+    
+    volumes:
+      - ./RadarMoves.Server/appsettings.json:/app/appsettings.json
+  
+    depends_on:
+      redis:
+        condition: service_started
+    networks:
+      - radar-moves-network
+
+volumes:
+  redis-data:
+  
+
+networks:
+  radar-moves-network:
+    driver: bridge
+

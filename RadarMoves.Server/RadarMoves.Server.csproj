@@ -10,6 +10,8 @@
     <PackageReference Include="PureHDF" Version="2.1.1" />
     <PackageReference Include="StackExchange.Redis" Version="2.10.1" />
     <ProjectReference Include="..\RadarMoves.Client\RadarMoves.Client.csproj" />
+    <ProjectReference Include="..\RadarMoves.Shared\RadarMoves.Shared.csproj" />
+
     <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly.Server" Version="9.0.11" />
   </ItemGroup>
 
