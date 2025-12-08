@@ -1,69 +1,9 @@
-using System.Numerics;
-using System.Text.Json;
-using System.Text.Json.Serialization;
-using Xunit;
-using System.IO;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
-using SixLabors.ImageSharp.Processing;
-using System;
-using PureHDF;
+
 using RadarMoves.Server.Dataset;
-using System.Reflection.Metadata;
+
 
 namespace RadarMoves.Test;
 
-
-public static class RadarImage {
-    // Simple Jet-style colormap (blue → green → yellow → red)
-    private static Rgba32 JetColor(float t) {
-        t = Math.Clamp(t, 0f, 1f);
-        byte r = (byte)(Math.Clamp(1.5f - Math.Abs(4f * t - 3f), 0f, 1f) * 255);
-        byte g = (byte)(Math.Clamp(1.5f - Math.Abs(4f * t - 2f), 0f, 1f) * 255);
-        byte b = (byte)(Math.Clamp(1.5f - Math.Abs(4f * t - 1f), 0f, 1f) * 255);
-        return new Rgba32(r, g, b);
-    }
-
-    public static void SaveRadarImage(float[,] radarData, string filePath) {
-        int height = radarData.GetLength(0);
-        int width = radarData.GetLength(1);
-
-        // Find min/max for normalization
-        float min = float.MaxValue;
-        float max = float.MinValue;
-        for (int y = 0; y < height; y++) {
-            for (int x = 0; x < width; x++) {
-                float v = radarData[y, x];
-                if (float.IsNaN(v)) continue;  // ignore NaNs
-                if (v < min) min = v;
-                if (v > max) max = v;
-            }
-        }
-
-        float range = max - min;
-        if (range == 0) range = 1f;
-
-        using var image = new Image<Rgba32>(width, height);
-
-
-        for (int y = 0; y < height; y++) {
-            for (int x = 0; x < width; x++) {
-                float val = radarData[y, x];
-                if (float.IsNaN(val)) {
-                    image[x, y] = new Rgba32(0, 0, 0, 0);
-                } else {
-                    float t = (val - min) / range;
-                    image[x, y] = JetColor(t);
-                }
-            }
-        }
-
-
-
-
-        image.Save(filePath);
-    }
-}
 
 public class DatasetTests {
     public static readonly string DATA_ROOT = Path.Combine(Directory.GetCurrentDirectory(), "..", "..", "..", "..");
@@ -119,7 +59,7 @@ public class DatasetTests {
             }
         }
         Console.WriteLine($"vMin: {vMin}, vMax: {vMax}");
-        RadarImage.SaveRadarImage(radarMoment, Path.Combine(DATA_ROOT, "radarMoment.png"));
+        new ImageWriter(radarMoment).Save(Path.Combine(DATA_ROOT, "radarMoment.png"));
 
 
 
@@ -144,7 +84,7 @@ public class DatasetTests {
         Assert.Equal(projected.GetLength(0), height);
         Assert.Equal(projected.GetLength(1), width);
         var outfile = Path.Combine(DATA_ROOT, "projected.png");
-        RadarImage.SaveRadarImage(projected, outfile);
+        new ImageWriter(projected).Save(outfile);
         Assert.True(File.Exists(outfile));
         // --------- test that the latitudes and longitudes are in the correct order
 
