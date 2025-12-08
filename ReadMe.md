@@ -10,6 +10,12 @@ dotnet watch --project RadarMoves # start the application
 # open http://localhost:8080/state in the browser
 ```
 
+### Testing
+
+```bash
+dotnet test dotnet test RadarMoves.Test/RadarMoves.Test.csproj
+```
+
 ### Production
 
 ```bash
@@ -17,7 +23,7 @@ docker-compose up -d
 # open http://localhost:8080/state in the browser
 ```
 
-## Setup
+### Application Initialization
 
 ```bash
 # Usage:
