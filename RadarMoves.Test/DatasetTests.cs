@@ -84,7 +84,10 @@ public class DatasetTests {
         Assert.Equal(projected.GetLength(0), height);
         Assert.Equal(projected.GetLength(1), width);
         var outfile = Path.Combine(DATA_ROOT, "projected.png");
-        new ImageWriter(projected).Save(outfile);
+        ImageWriter writer = new(projected);
+        writer.Save(outfile);
+        outfile = Path.Combine(DATA_ROOT, "projected.svg");
+        writer.SaveSVG(outfile);
         Assert.True(File.Exists(outfile));
         // --------- test that the latitudes and longitudes are in the correct order
 
