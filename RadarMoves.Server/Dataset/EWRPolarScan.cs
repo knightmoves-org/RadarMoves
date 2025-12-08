@@ -347,7 +347,9 @@ public sealed class EWRPolarScan : IDisposable {
         float[,] radarData,
         GridSpec gs = default,
         Predicate<float>? isValid = default,
-        float maxDistance = 2.0f
+        float maxDistance = .6f,
+        float minWeight = .001f,
+        int minValidCount = 3
     ) {
         isValid ??= (v) => !float.IsNaN(v);
         // Grid defaults (example: bounding box centered around radar ± 150 km)
@@ -357,8 +359,8 @@ public sealed class EWRPolarScan : IDisposable {
                 Longitude - span, Longitude + span,
                 Latitude - span, Latitude + span, 1500, 1500);
         }
-        const float MIN_WEIGHT = 0.01f;
-        const int MIN_VALID_COUNT = 2; // Require at least 2 valid values for a pixel
+        // const float MIN_WEIGHT = 2.0f;
+        // const int MIN_VALID_COUNT = 3; // Require at least 2 valid values for a pixel
 
 
         int width = gs.Width;
@@ -515,7 +517,7 @@ public sealed class EWRPolarScan : IDisposable {
                 int c = final.counts[y, x];
 
                 // Require both minimum weight AND minimum count of valid values
-                if (w < MIN_WEIGHT || c < MIN_VALID_COUNT) {
+                if (w < minWeight || c < minValidCount) {
                     // Not enough weight or not enough valid values - mark as nodata
                     output.raster[y, x] = float.NaN;
                 } else {
