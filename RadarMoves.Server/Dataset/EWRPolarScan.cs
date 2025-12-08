@@ -75,8 +75,8 @@ public sealed class EWRPolarScan : IDisposable {
     // ------------------------------------------------------------------------------------------------------------- //
     // TODO: Move to a separate class
     // ------------------------------------------------------------------------------------------------------------- //
-    public const double Re = 6_371_000.0f;
-    public const double Re43 = Re * (4.0f / 3.0f);
+    public const double Re = 6_371_000.0;
+    public const double Re43 = Re * (4.0 / 3.0);
     private const double DEG2RAD = PI / 180.0;
     private static T GetDeg2Rad<T>() where T : IFloatingPoint<T> => T.CreateChecked(DEG2RAD);
     public static T Deg2Rad<T>(T degrees) where T : IFloatingPoint<T> => degrees * GetDeg2Rad<T>();
@@ -175,6 +175,8 @@ public sealed class EWRPolarScan : IDisposable {
             var src = g.Dataset("data").Read<float[,]>();
 
             if (gain != 1.0f || offset != 0.0f) {
+                // Allocate the array before writing to it
+                _data[k] = new float[NRays, NBins];
                 for (int i = 0; i < NRays; i++)
                     for (int j = 0; j < NBins; j++)
                         _data[k][i, j] = src[i, j] * gain + offset;
@@ -226,6 +228,23 @@ public sealed class EWRPolarScan : IDisposable {
     }
 
     /// <summary>
+    /// Thread-local structure to hold min/max values for parallel processing.
+    /// </summary>
+    private struct ThreadLocalMinMax {
+        public float LatMin;
+        public float LatMax;
+        public float LonMin;
+        public float LonMax;
+
+        public ThreadLocalMinMax() {
+            LatMin = float.MaxValue;
+            LatMax = float.MinValue;
+            LonMin = float.MaxValue;
+            LonMax = float.MinValue;
+        }
+    }
+
+    /// <summary>
     /// Compute geodetic coordinates (lat/lon/height) for each bin.
     /// Parallelized across rays. The result is cached on first call.
     /// </summary>
@@ -250,49 +269,74 @@ public sealed class EWRPolarScan : IDisposable {
         double el = Deg2Rad(ElevationAngle);
         double sinEl = Sin(el);
         double cosEl = Cos(el);
+
+        // Thread-local min/max values to avoid race conditions
         float latMin = float.MaxValue;
         float latMax = float.MinValue;
         float lonMin = float.MaxValue;
         float lonMax = float.MinValue;
 
+        // Use object to hold thread-local state for synchronization
+        object lockObj = new object();
 
-        Parallel.For(0, NRays, i => {
+        Parallel.For(0, NRays,
+            // localInit - initialize thread-local min/max values
+            () => new ThreadLocalMinMax(),
+            // body
+            (i, loopState, local) => {
+                double az = Deg2Rad(Azimuths[i]);
+                double cosAz = Cos(az);
+                double sinAz = Sin(az);
 
-            double az = Deg2Rad(Azimuths[i]);
-            double cosAz = Cos(az);
-            double sinAz = Sin(az);
+                for (int j = 0; j < NBins; j++) {
+                    double r = groundRange[j];
 
-            for (int j = 0; j < NBins; j++) {
-                double r = groundRange[j];
+                    // Beam height above radar (FIXED: use el, not Deg2Rad(elangle) again)
+                    double h = Sqrt(r * r + Re * Re + 2.0 * r * Re * sinEl) - Re;
 
-                // Beam height above radar (FIXED: use el, not Deg2Rad(elangle) again)
-                double h = Sqrt(r * r + Re * Re + 2.0 * r * Re * sinEl) - Re;
+                    // Surface arc distance
+                    double s = Re * Asin(r * cosEl / (Re + h));
 
-                // Surface arc distance
-                double s = Re * Asin(r * cosEl / (Re + h));
+                    // Angular distance
+                    double sigma = s * invRe;
 
-                // Angular distance
-                double sigma = s * invRe;
+                    // Geodetic latitude
+                    double lat = Asin(sinLat0 * Cos(sigma) + cosLat0 * Sin(sigma) * cosAz);
 
-                // Geodetic latitude
-                double lat = Asin(sinLat0 * Cos(sigma) + cosLat0 * Sin(sigma) * cosAz);
+                    // Geodetic longitude
+                    double lon = lon0 + Atan2(sinAz * Sin(sigma) * cosLat0, Cos(sigma) - sinLat0 * Sin(lat));
 
-                // Geodetic longitude
-                double lon = lon0 + Atan2(sinAz * Sin(sigma) * cosLat0, Cos(sigma) - sinLat0 * Sin(lat));
+                    // Normalize lon to -pi..pi
+                    lon = IEEERemainder(lon + PI, 2.0 * PI) - PI;
 
-                // Normalize lon to -pi..pi
-                lon = IEEERemainder(lon + PI, 2.0 * PI) - PI;
+                    double latDeg = Rad2Deg(lat);
+                    double lonDeg = Rad2Deg(lon);
 
-                latitude[i, j] = Rad2Deg(lat);
-                longitude[i, j] = Rad2Deg(lon);
-                height[i, j] = h;
-                if (latitude[i, j] < latMin) latMin = (float)latitude[i, j];
-                if (latitude[i, j] > latMax) latMax = (float)latitude[i, j];
-                if (longitude[i, j] < lonMin) lonMin = (float)longitude[i, j];
-                if (longitude[i, j] > lonMax) lonMax = (float)longitude[i, j];
+                    latitude[i, j] = latDeg;
+                    longitude[i, j] = lonDeg;
+                    height[i, j] = h;
+
+                    // Update thread-local min/max values
+                    float latF = (float)latDeg;
+                    float lonF = (float)lonDeg;
+                    if (latF < local.LatMin) local.LatMin = latF;
+                    if (latF > local.LatMax) local.LatMax = latF;
+                    if (lonF < local.LonMin) local.LonMin = lonF;
+                    if (lonF > local.LonMax) local.LonMax = lonF;
+                }
+
+                return local;
+            },
+            // localFinally - reduce thread-local values into global min/max
+            (local) => {
+                lock (lockObj) {
+                    if (local.LatMin < latMin) latMin = local.LatMin;
+                    if (local.LatMax > latMax) latMax = local.LatMax;
+                    if (local.LonMin < lonMin) lonMin = local.LonMin;
+                    if (local.LonMax > lonMax) lonMax = local.LonMax;
+                }
             }
-
-        });
+        );
 
         _cachedGeodetic = (latitude, longitude, height, (latMin, latMax, lonMin, lonMax));
         return _cachedGeodetic.Value;
