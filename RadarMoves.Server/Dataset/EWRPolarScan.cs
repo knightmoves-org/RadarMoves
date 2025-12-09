@@ -1,18 +1,12 @@
-using System;
 using System.Collections.Concurrent;
 using System.Globalization;
 using System.Numerics;
 using PureHDF;
 using PureHDF.VOL.Native;
 using System.IO.MemoryMappedFiles;
-
 using static System.Math;
-using Microsoft.AspNetCore.Mvc;
-using System.Runtime.CompilerServices;
-using System.Reflection.Metadata.Ecma335;
-using System.Security.Cryptography.X509Certificates;
-using System.Reflection.Metadata;
-// using System;
+
+using RadarMoves.Server.Data;
 
 
 namespace RadarMoves.Server.Dataset;
@@ -166,6 +160,11 @@ public sealed class EWRPolarScan : IDisposable {
 
         string[] keys = ["data1", "data2", "data3", "data4"];
         _data = new float[keys.Length][,];
+
+
+        IRadarFilter[] filters = [
+            new GaussianFilter(sigma: 1.5f, radius: 2),
+        ];
         for (int k = 0; k < keys.Length; k++) {
             var key = keys[k];
             var g = root.Group(key);
@@ -183,6 +182,12 @@ public sealed class EWRPolarScan : IDisposable {
             } else {
                 _data[k] = src;
             }
+
+            // Apply filters to the data
+            var grid = new Span2D(_data[k]);
+            foreach (var f in filters)
+                f.Apply(grid);
+            _data[k] = grid.ToArray();
         }
         _cachedGeodetic = null;
     }
@@ -343,13 +348,19 @@ public sealed class EWRPolarScan : IDisposable {
     }
 
 
+    /// <summary>
+    /// Special nodata value used to mark pixels outside radar coverage bounds (rendered as black).
+    /// NaN is used for other nodata cases (rendered as transparent).
+    /// </summary>
+    public const float NoDataValue = -9999f;
+
     public (float[,] raster, float[,] latitudes, float[,] longitudes) InterpolateIDW(
         float[,] radarData,
         GridSpec gs = default,
         Predicate<float>? isValid = default,
-        float maxDistance = .6f,
-        float minWeight = .001f,
-        int minValidCount = 3
+        float maxDistance = 2.0f,
+        float minWeight = 0.01f,
+        int minValidCount = 2
     ) {
         isValid ??= (v) => !float.IsNaN(v);
         // Grid defaults (example: bounding box centered around radar ± 150 km)
@@ -359,8 +370,7 @@ public sealed class EWRPolarScan : IDisposable {
                 Longitude - span, Longitude + span,
                 Latitude - span, Latitude + span, 1500, 1500);
         }
-        // const float MIN_WEIGHT = 2.0f;
-        // const int MIN_VALID_COUNT = 3; // Require at least 2 valid values for a pixel
+
 
 
         int width = gs.Width;
@@ -507,6 +517,12 @@ public sealed class EWRPolarScan : IDisposable {
             }
         }
 
+        // Get actual radar data bounds and calculate maximum ground range
+        var (_, _, _, (dataLatMin, dataLatMax, dataLonMin, dataLonMax)) = GetGeodeticCoordinates();
+        double[] groundRange = GroundRange();
+        float maxGroundRange = (float)groundRange[groundRange.Length - 1]; // Maximum range in meters
+        float maxGroundRangeKm = maxGroundRange / 1000f; // Convert to km for distance calculation
+
         // Average where weights > 0; where weights==0 leave as nodata (NaN)
         // Calculate lat/lon for ALL pixels based on grid coordinates
         // Filter out pixels with too little weight or too few valid values to reduce clutter
@@ -516,25 +532,60 @@ public sealed class EWRPolarScan : IDisposable {
                 float w = final.weights[y, x];
                 int c = final.counts[y, x];
 
-                // Require both minimum weight AND minimum count of valid values
-                if (w < minWeight || c < minValidCount) {
-                    // Not enough weight or not enough valid values - mark as nodata
-                    output.raster[y, x] = float.NaN;
-                } else {
-                    // Average the accumulated weighted values
-                    output.raster[y, x] = final.raster[y, x] / w;
-                }
-
                 // Calculate lat/lon for this pixel from grid coordinates
                 // If lat/lon was already calculated from radar data, use that; otherwise calculate from grid position
+                float pixelLat, pixelLon;
                 if (!float.IsNaN(final.latitudes[y, x]) && !float.IsNaN(final.longitudes[y, x])) {
                     // Use the lat/lon calculated from radar data
-                    output.latitudes[y, x] = final.latitudes[y, x];
-                    output.longitudes[y, x] = final.longitudes[y, x];
+                    pixelLat = final.latitudes[y, x];
+                    pixelLon = final.longitudes[y, x];
+                    output.latitudes[y, x] = pixelLat;
+                    output.longitudes[y, x] = pixelLon;
                 } else {
                     // Calculate lat/lon from grid pixel center coordinates
-                    output.longitudes[y, x] = lonMin + (x + 0.5f) * lonRes;
-                    output.latitudes[y, x] = latMax - (y + 0.5f) * latRes; // (assuming y=0 is top/north)
+                    pixelLon = lonMin + (x + 0.5f) * lonRes;
+                    pixelLat = latMax - (y + 0.5f) * latRes; // (assuming y=0 is top/north)
+                    output.longitudes[y, x] = pixelLon;
+                    output.latitudes[y, x] = pixelLat;
+                }
+
+                // Calculate distance from radar center to this pixel
+                // Using Haversine formula for accurate distance calculation
+                double lat1Rad = Deg2Rad(Latitude);
+                double lon1Rad = Deg2Rad(Longitude);
+                double lat2Rad = Deg2Rad(pixelLat);
+                double lon2Rad = Deg2Rad(pixelLon);
+
+                double dLat = lat2Rad - lat1Rad;
+                double dLon = lon2Rad - lon1Rad;
+                double a = Sin(dLat / 2) * Sin(dLat / 2) +
+                          Cos(lat1Rad) * Cos(lat2Rad) *
+                          Sin(dLon / 2) * Sin(dLon / 2);
+                double haversineC = 2 * Atan2(Sqrt(a), Sqrt(1 - a));
+                double distanceMeters = Re * haversineC;
+                float distanceKm = (float)(distanceMeters / 1000.0);
+
+                // Check if pixel is outside radar coverage:
+                // 1. Outside rectangular bounds, OR
+                // 2. Beyond maximum ground range
+                // Pixels inside bounds but with no data should be NaN (transparent), not NoDataValue (black)
+                bool outsideBounds = pixelLat < dataLatMin || pixelLat > dataLatMax ||
+                                     pixelLon < dataLonMin || pixelLon > dataLonMax;
+                bool beyondRange = distanceKm > maxGroundRangeKm * 1.05f; // 5% margin for edge cases
+
+                if (outsideBounds || beyondRange) {
+                    // Pixel is outside radar coverage bounds - mark as nodata value (will render as black)
+                    output.raster[y, x] = NoDataValue;
+                } else {
+                    // Pixel is inside radar coverage bounds
+                    // Require both minimum weight AND minimum count of valid values
+                    if (w < minWeight || c < minValidCount) {
+                        // Not enough weight or not enough valid values - mark as nodata (transparent)
+                        output.raster[y, x] = float.NaN;
+                    } else {
+                        // Average the accumulated weighted values
+                        output.raster[y, x] = final.raster[y, x] / w;
+                    }
                 }
             }
         }

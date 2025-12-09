@@ -61,44 +61,38 @@ public class DatasetTests {
         Console.WriteLine($"vMin: {vMin}, vMax: {vMax}");
         new ImageWriter(radarMoment).Save(Path.Combine(DATA_ROOT, "radarMoment.png"));
 
-
-
-        int height = 512;
-        int width = 512;
-
-
+        int height = 1024;
+        int width = 1024;
         // Call the function
         DateTime endBenchmark;
         DateTime startBenchmark;
         EWRPolarScan.GridSpec gridSpec = new(lonMin, lonMax, latMin, latMax, width, height);
-        // assert gridSpec is correct
 
+        for (int i = 0; i < ds.Keys.Count(); i++) {
+            var key = ds.Keys.ElementAt(i);
+            float[,] s = ds[key];
 
+            startBenchmark = DateTime.Now;
+            var (projected, latitudes, longitudes) = ds.InterpolateIDW(s, gridSpec, isValid: (v) => !float.IsNaN(v), maxDistance: 1.2f, minWeight: 1.0f, minValidCount: 2);
+            endBenchmark = DateTime.Now;
+            Console.WriteLine($"ds.ToRaster in {endBenchmark - startBenchmark}");
+            Assert.Equal(projected.GetLength(0), height);
+            Assert.Equal(projected.GetLength(1), width);
+            // we want to put each of the projected images in a 4x4 grid
 
+            // --------- test that the latitudes and longitudes are in the correct order
 
-        startBenchmark = DateTime.Now;
-
-        var (projected, latitudes, longitudes) = ds.InterpolateIDW(radarMoment, gridSpec, isValid: (v) => !float.IsNaN(v) && v > 0.0f);
-        endBenchmark = DateTime.Now;
-        Console.WriteLine($"ds.ToRaster in {endBenchmark - startBenchmark}");
-        Assert.Equal(projected.GetLength(0), height);
-        Assert.Equal(projected.GetLength(1), width);
-        var outfile = Path.Combine(DATA_ROOT, "projected.png");
-        ImageWriter writer = new(projected);
-        writer.Save(outfile);
-        outfile = Path.Combine(DATA_ROOT, "projected.svg");
-        writer.SaveSVG(outfile);
-        Assert.True(File.Exists(outfile));
-        // --------- test that the latitudes and longitudes are in the correct order
-
-
+            var outfile = Path.Combine(DATA_ROOT, $"Projected{key}.png");
+            ImageWriter writer = new(projected);
+            writer.SavePNG(outfile, channel: key);
+        }
     }
 
     [Fact]
     public void ToRaster_LatLonOrder_ShouldBeCorrect() {
         // Arrange
-        var root = Path.Combine(Directory.GetCurrentDirectory(), "..", "..", "..", "..");
-        var filename = Path.Combine(root, "data", "ewr", "EWR250524024617.h5");
+
+        var filename = Path.Combine(DATA_ROOT, "data", "ewr", "EWR250524024617.h5");
         var ds = new EWRPolarScan(filename);
         float[,] radarMoment = ds[Channel.Reflectivity];
 
