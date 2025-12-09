@@ -1,5 +1,5 @@
+using System.IO;
 using System.Xml.Linq;
-
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
 using SixLabors.ImageSharp.Drawing.Processing;
@@ -461,6 +461,120 @@ public class ImageWriter(float[,] data) {
         }
 
         image.Save(filePath);
+    }
+
+    /// <summary>
+    /// Gets the image as PNG bytes (without saving to file)
+    /// </summary>
+    public byte[] GetPNGBytes(Channel channel, bool includeColorBar = true,
+        float? radarLat = null, float? radarLon = null, EWRPolarScan.GridSpec? gridSpec = null) {
+        var threshold = ImageThreshold.Get(channel);
+        return GetPNGBytes(threshold.ValueMin, threshold.ValueMax, includeColorBar, radarLat, radarLon, gridSpec);
+    }
+
+    /// <summary>
+    /// Gets the image as PNG bytes with explicit min/max values
+    /// </summary>
+    public byte[] GetPNGBytes(float? minValue = null, float? maxValue = null, bool includeColorBar = true,
+        float? radarLat = null, float? radarLon = null, EWRPolarScan.GridSpec? gridSpec = null) {
+        float min, max, range;
+
+        if (minValue.HasValue && maxValue.HasValue) {
+            min = minValue.Value;
+            max = maxValue.Value;
+            range = max - min;
+            if (range == 0) range = 1f;
+        } else {
+            var normalization = GetNormalizationRange(Data);
+            min = normalization.min;
+            max = normalization.max;
+            range = normalization.range;
+        }
+
+        const int colorBarWidth = 60;
+        const int padding = 10;
+        const int borderWidth = 2;
+        const int tickLength = 8;
+        int totalWidth = Width + (includeColorBar ? colorBarWidth + padding + 2 * borderWidth + tickLength : 0);
+
+        using var image = new Image<Rgba32>(totalWidth, Height);
+
+        // Draw main image
+        var black = new Rgba32(0, 0, 0, 255);
+        var transparent = new Rgba32(0, 0, 0, 0);
+        for (int y = 0; y < Height; y++) {
+            for (int x = 0; x < Width; x++) {
+                float val = Data[y, x];
+                if (float.IsNaN(val)) {
+                    image[x, y] = transparent;
+                } else if (Math.Abs(val - EWRPolarScan.NoData) < 1e-6) {
+                    image[x, y] = black;
+                } else {
+                    float t = (val - min) / range;
+                    image[x, y] = JetColor(t);
+                }
+            }
+        }
+
+        // Draw range rings if radar location and grid spec are provided
+        if (radarLat.HasValue && radarLon.HasValue && gridSpec.HasValue) {
+            DrawRangeRingsPNG(image, radarLat.Value, radarLon.Value, gridSpec.Value, Width, Height);
+        }
+
+        // Draw color bar if requested
+        if (includeColorBar) {
+            int colorBarX = Width + padding + borderWidth;
+            int colorBarHeight = Height - 2 * borderWidth;
+            int colorBarY = borderWidth;
+
+            // Draw color bar background
+            var white = new Rgba32(255, 255, 255, 255);
+            for (int y = colorBarY; y < colorBarY + colorBarHeight; y++) {
+                for (int x = colorBarX; x < colorBarX + colorBarWidth; x++) {
+                    image[x, y] = white;
+                }
+            }
+
+            // Draw color gradient
+            for (int i = 0; i < colorBarHeight; i++) {
+                float t = 1f - (float)i / colorBarHeight; // Top to bottom: max to min
+                var color = JetColor(t);
+                for (int x = colorBarX; x < colorBarX + colorBarWidth; x++) {
+                    image[x, colorBarY + i] = color;
+                }
+            }
+
+            // Draw border around color bar
+            var borderColor = new Rgba32(0, 0, 0, 255);
+            for (int y = colorBarY; y < colorBarY + colorBarHeight; y++) {
+                image[colorBarX - borderWidth, y] = borderColor;
+                image[colorBarX + colorBarWidth, y] = borderColor;
+            }
+            for (int x = colorBarX - borderWidth; x <= colorBarX + colorBarWidth; x++) {
+                image[x, colorBarY - borderWidth] = borderColor;
+                image[x, colorBarY + colorBarHeight] = borderColor;
+            }
+
+            // Draw tick marks and labels (simplified - would need font rendering for full implementation)
+            // For now, just draw tick marks
+            int numTicks = 5;
+            for (int i = 0; i <= numTicks; i++) {
+                float tickValue = min + (max - min) * (1f - (float)i / numTicks);
+                int tickY = colorBarY + (int)((float)i / numTicks * colorBarHeight);
+
+                // Draw tick mark
+                for (int x = colorBarX + colorBarWidth; x < colorBarX + colorBarWidth + tickLength; x++) {
+                    if (x < totalWidth && tickY < Height) {
+                        image[x, tickY] = borderColor;
+                    }
+                }
+            }
+        }
+
+        // Convert to byte array
+        using var memoryStream = new MemoryStream();
+        image.SaveAsPng(memoryStream);
+        return memoryStream.ToArray();
     }
 
 

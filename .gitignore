@@ -484,4 +484,6 @@ $RECYCLE.BIN/
 *.swp
 .venv/
 .trash/
-.vscode/
+.vscode
+# there is too much data to commit
+data/ewr/archive/

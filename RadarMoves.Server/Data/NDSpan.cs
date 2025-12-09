@@ -36,9 +36,7 @@ namespace RadarMoves.Server.Data {
         /// Flatten any Array (T[], T[,], T[,,], ...) into a contiguous buffer and return NDSpan.
         /// </summary>
         public static NDSpan<T> FromArray(Array arr) {
-            if (arr == null) throw new ArgumentNullException(nameof(arr));
-            if (!(arr is T)) { } // keep for clarity; we will cast elements below
-
+            ArgumentNullException.ThrowIfNull(arr);
             int rank = arr.Rank;
             if (rank == 0) throw new ArgumentException("Array must have rank >= 1", nameof(arr));
 
@@ -52,10 +50,8 @@ namespace RadarMoves.Server.Data {
             var buf = new T[total];
             int idx = 0;
             foreach (object? v in arr) // enumerates in row-major order
-            {
-                // unbox/cast
                 buf[idx++] = (T)v!;
-            }
+
 
             return new NDSpan<T>(buf.AsSpan(), shape);
         }
@@ -64,7 +60,7 @@ namespace RadarMoves.Server.Data {
         /// Construct directly from a flat T[] and shape (fast; no copy).
         /// </summary>
         public static NDSpan<T> FromFlatArray(T[] flatBuffer, int[] shape) {
-            if (flatBuffer == null) throw new ArgumentNullException(nameof(flatBuffer));
+            ArgumentNullException.ThrowIfNull(flatBuffer);
             return new NDSpan<T>(flatBuffer.AsSpan(), shape);
         }
 
@@ -103,7 +99,7 @@ namespace RadarMoves.Server.Data {
         /// </summary>
         public ref T this[params int[] indices] {
             get {
-                if (indices == null) throw new ArgumentNullException(nameof(indices));
+                ArgumentNullException.ThrowIfNull(indices);
                 if (indices.Length != _shape.Length) throw new ArgumentException($"Index rank ({indices.Length}) does not match NDSpan rank ({_shape.Length}).");
 
                 int flat = _offset;

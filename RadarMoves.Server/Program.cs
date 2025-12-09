@@ -1,9 +1,10 @@
-using RadarMoves.Server.Components;
 using Microsoft.AspNetCore.ResponseCompression;
 using StackExchange.Redis;
+
+using RadarMoves.Server.Components;
+using RadarMoves.Server.Services;
 using RadarMoves.Server.Hubs;
-// using RadarMoves.Client.Pages;
-// using Microsoft.Extensions.Configuration;
+using RadarMoves.Server.Data;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -29,6 +30,35 @@ builder.Services.AddSignalR();
 builder.Services.AddResponseCompression(opts => {
     opts.MimeTypes = ResponseCompressionDefaults.MimeTypes.Concat(
         ["application/octet-stream"]);
+});
+
+// ===========================================================================================
+// RADAR DATASET SERVICE
+// ===========================================================================================
+
+// Register the radar data provider (reads directly from archive)
+// Singleton because it's the same for the entire application lifetime
+builder.Services.AddSingleton<IRadarDataProvider>(sp => {
+    var configuration = sp.GetRequiredService<IConfiguration>();
+    var logger = sp.GetRequiredService<ILogger<ArchiveRadarDataProvider>>();
+    return new ArchiveRadarDataProvider(configuration, logger);
+});
+
+builder.Services.AddSingleton<RadarDatasetService>();
+builder.Services.AddControllers();
+
+// Register HttpClient for Blazor WebAssembly components during server-side rendering
+// This is needed because InteractiveWebAssembly components are initially rendered on the server
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddScoped<HttpClient>(sp => {
+    var httpContextAccessor = sp.GetRequiredService<IHttpContextAccessor>();
+    var httpContext = httpContextAccessor.HttpContext;
+    if (httpContext != null) {
+        var request = httpContext.Request;
+        var baseAddress = $"{request.Scheme}://{request.Host}";
+        return new HttpClient { BaseAddress = new Uri(baseAddress) };
+    }
+    return new HttpClient { BaseAddress = new Uri("https://localhost") };
 });
 
 // ===========================================================================================
@@ -70,6 +100,8 @@ if (app.Environment.IsDevelopment()) {
 app.UseHttpsRedirection();
 
 app.UseAntiforgery();
+
+app.MapControllers();
 
 app.MapStaticAssets();
 

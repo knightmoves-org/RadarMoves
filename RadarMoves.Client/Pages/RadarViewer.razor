@@ -1,0 +1,648 @@
+@page "/radar"
+@rendermode InteractiveWebAssembly
+@using System.Net.Http.Json
+@using Microsoft.AspNetCore.Components
+@inject IServiceProvider ServiceProvider
+@inject NavigationManager NavigationManager
+@inject ILogger<RadarViewer> Logger
+
+<PageTitle>Radar Viewer</PageTitle>
+
+<div class="radar-viewer-container">
+    <div class="controls-panel">
+        <h3>Radar Data Controls</h3>
+
+        <!-- Channel Selection -->
+        <div class="control-group">
+            <label for="channel-select">Channel:</label>
+            <select id="channel-select" value="@SelectedChannel" @onchange="@(async (ChangeEventArgs e) => { SelectedChannel = e.Value?.ToString() ?? "Reflectivity"; await OnChannelChanged(); })" class="form-control">
+                @foreach (var channel in AvailableChannels)
+                {
+                    <option value="@channel">@channel</option>
+                }
+            </select>
+        </div>
+
+        <!-- Time Slider -->
+        <div class="control-group">
+            <label for="time-slider">Time: @(Timestamps.Count > 0 ? SelectedTime.ToString("yyyy-MM-dd HH:mm:ss") : "No data")</label>
+            <input type="range" id="time-slider" 
+                   min="0" max="@(Math.Max(0, Timestamps.Count - 1))" 
+                   step="1" 
+                   value="@TimeIndex"
+                   @oninput="@(async (ChangeEventArgs e) => { if (int.TryParse(e.Value?.ToString(), out var idx) && idx >= 0 && idx < Timestamps.Count) { TimeIndex = idx; await OnTimeChanged(); } })"
+                   class="slider"
+                   disabled="@(Timestamps.Count == 0)" />
+            <div class="slider-labels">
+                <span>@(TimeRange?.Start.ToString("HH:mm") ?? "")</span>
+                <span>@(TimeRange?.End.ToString("HH:mm") ?? "")</span>
+            </div>
+        </div>
+
+        <!-- Elevation Slider -->
+        <div class="control-group">
+            <label for="elevation-slider">Elevation: @(ElevationAngles.Count > 0 ? SelectedElevation.ToString("F2") : "N/A")°</label>
+            <input type="range" id="elevation-slider" 
+                   min="0" max="@(Math.Max(0, ElevationAngles.Count - 1))" 
+                   step="1" 
+                   value="@ElevationIndex"
+                   @oninput="@(async (ChangeEventArgs e) => { if (int.TryParse(e.Value?.ToString(), out var idx) && idx >= 0 && idx < ElevationAngles.Count) { ElevationIndex = idx; await OnElevationChanged(); } })"
+                   class="slider"
+                   disabled="@(!ElevationAngles.Any())" />
+            @if (ElevationAngles.Any())
+            {
+                <div class="slider-labels">
+                    <span>@ElevationAngles.First().ToString("F2")°</span>
+                    <span>@ElevationAngles.Last().ToString("F2")°</span>
+                </div>
+            }
+        </div>
+
+        <!-- Latitude/Longitude Inputs -->
+        <div class="control-group">
+            <label for="lat-input">Latitude:</label>
+            <input type="number" id="lat-input" value="@Latitude" @oninput="@(async (ChangeEventArgs e) => { if (float.TryParse(e.Value?.ToString(), out var val)) { Latitude = val; await OnLocationChanged(); } })" step="0.0001" class="form-control" />
+        </div>
+
+        <div class="control-group">
+            <label for="lon-input">Longitude:</label>
+            <input type="number" id="lon-input" value="@Longitude" @oninput="@(async (ChangeEventArgs e) => { if (float.TryParse(e.Value?.ToString(), out var val)) { Longitude = val; await OnLocationChanged(); } })" step="0.0001" class="form-control" />
+        </div>
+
+        <!-- Data Value Display -->
+        <div class="control-group">
+            <div class="value-display">
+                <strong>Value:</strong>
+                @if (CurrentValue.HasValue)
+                {
+                    <span class="value-text">@CurrentValue.Value.ToString("F2")</span>
+                }
+                else
+                {
+                    <span class="value-text no-data">N/A</span>
+                }
+            </div>
+        </div>
+
+        <!-- Metadata Display -->
+        @if (ScanMetadata != null)
+        {
+            <div class="control-group metadata">
+                <h4>Scan Metadata</h4>
+                <div class="metadata-item">
+                    <span>Rays:</span> <span>@ScanMetadata.NRays</span>
+                </div>
+                <div class="metadata-item">
+                    <span>Bins:</span> <span>@ScanMetadata.NBins</span>
+                </div>
+                <div class="metadata-item">
+                    <span>Location:</span> <span>@ScanMetadata.Latitude.ToString("F4")°, @ScanMetadata.Longitude.ToString("F4")°</span>
+                </div>
+            </div>
+        }
+
+        @if (!string.IsNullOrEmpty(ErrorMessage))
+        {
+            <div class="error-message">@ErrorMessage</div>
+        }
+    </div>
+
+    <div class="viewer-main">
+        <div class="status-bar">
+            @if (IsLoading)
+            {
+                <span>Loading...</span>
+            }
+            else if (Timestamps.Count > 0)
+            {
+                <span>Loaded @Timestamps.Count time points</span>
+            }
+            else
+            {
+                <span>No data available</span>
+            }
+        </div>
+        <div class="image-container">
+            @if (ImageUrl != null)
+            {
+                <img src="@ImageUrl" alt="Radar Image" class="radar-image" />
+            }
+            else if (IsLoading)
+            {
+                <div class="loading-message">Loading image...</div>
+            }
+            else
+            {
+                <div class="canvas-placeholder">
+                    <p>Radar visualization will appear here</p>
+                    <p class="hint">Use the controls to navigate through the data</p>
+                </div>
+            }
+        </div>
+    </div>
+</div>
+
+@code {
+    private List<string> Timestamps { get; set; } = new();
+    private List<float> ElevationAngles { get; set; } = new();
+    private List<string> AvailableChannels { get; set; } = new() { "Reflectivity", "RadialVelocity", "SpectralWidth", "TotalPower" };
+    
+    private string SelectedChannel { get; set; } = "Reflectivity";
+    private int TimeIndex { get; set; } = 0;
+    private int ElevationIndex { get; set; } = 0;
+    private float Latitude { get; set; } = 38.9f;
+    private float Longitude { get; set; } = -92.3f;
+    
+    private DateTime SelectedTime {
+        get {
+            if (TimeIndex >= 0 && TimeIndex < Timestamps.Count && DateTime.TryParse(Timestamps[TimeIndex], out var dt))
+                return dt;
+            return DateTime.Now;
+        }
+    }
+    
+    private float SelectedElevation {
+        get {
+            if (ElevationIndex >= 0 && ElevationIndex < ElevationAngles.Count)
+                return ElevationAngles[ElevationIndex];
+            return 0f;
+        }
+    }
+    
+    private float? CurrentValue { get; set; }
+    private ScanMetadataDto? ScanMetadata { get; set; }
+    private (DateTime Start, DateTime End)? TimeRange { get; set; }
+    
+    private bool IsLoading { get; set; } = true;
+    private string? ErrorMessage { get; set; }
+    private HttpClient? Http { get; set; }
+    private string? ImageUrl { get; set; }
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Get HttpClient from service provider (works for both server and client rendering)
+        Http = ServiceProvider.GetService<HttpClient>();
+        if (Http == null)
+        {
+            // Fallback: create HttpClient if not available
+            // Use the current page's base address
+            var baseAddress = NavigationManager.BaseUri;
+            Http = new HttpClient { BaseAddress = new Uri(baseAddress) };
+        }
+        
+        await LoadMetadata();
+        if (Timestamps.Count > 0)
+        {
+            // Default to first timestamp
+            TimeIndex = 0;
+            await LoadElevations();
+            if (ElevationAngles.Count > 0)
+            {
+                // Default to first elevation
+                ElevationIndex = 0;
+                await LoadScanMetadata();
+                await LoadValue();
+                await LoadImage();
+            }
+        }
+    }
+
+    private async Task LoadMetadata()
+    {
+        if (Http == null) return;
+        try
+        {
+            IsLoading = true;
+            var response = await Http.GetFromJsonAsync<MetadataResponse>("api/RadarData/metadata");
+            if (response != null)
+            {
+                if (response.TimeRange != null)
+                {
+                    TimeRange = (response.TimeRange.Start, response.TimeRange.End);
+                }
+            }
+
+            var timestamps = await Http.GetFromJsonAsync<List<string>>("api/RadarData/timestamps");
+            if (timestamps != null)
+            {
+                Timestamps = timestamps;
+                // TimeIndex is already set to 0 by default, but ensure it's valid
+                if (Timestamps.Count > 0 && TimeIndex >= Timestamps.Count)
+                {
+                    TimeIndex = 0;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            ErrorMessage = $"Error loading metadata: {ex.Message}";
+            Logger.LogError(ex, "Error loading metadata");
+        }
+        finally
+        {
+            IsLoading = false;
+        }
+    }
+
+    private async Task LoadElevations()
+    {
+        if (Http == null) return;
+        try
+        {
+            if (Timestamps.Count == 0) return;
+
+            var timestamp = Timestamps[TimeIndex];
+            var elevations = await Http.GetFromJsonAsync<List<float>>($"api/RadarData/elevations/{Uri.EscapeDataString(timestamp)}");
+            if (elevations != null)
+            {
+                ElevationAngles = elevations;
+                // ElevationIndex is already set to 0 by default, but ensure it's valid
+                if (ElevationAngles.Count > 0 && ElevationIndex >= ElevationAngles.Count)
+                {
+                    ElevationIndex = 0;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            ErrorMessage = $"Error loading elevations: {ex.Message}";
+            Logger.LogError(ex, "Error loading elevations");
+        }
+    }
+
+    private async Task LoadScanMetadata()
+    {
+        if (Http == null) return;
+        try
+        {
+            if (Timestamps.Count == 0 || ElevationAngles.Count == 0) return;
+
+            var timestamp = Timestamps[TimeIndex];
+            var elevation = SelectedElevation;
+            var response = await Http.GetFromJsonAsync<ScanMetadataDto>($"api/RadarData/scan/{Uri.EscapeDataString(timestamp)}/{elevation}");
+            if (response != null)
+            {
+                ScanMetadata = response;
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error loading scan metadata");
+        }
+    }
+
+    private async Task LoadValue()
+    {
+        if (Http == null) return;
+        try
+        {
+            if (Timestamps.Count == 0 || ElevationAngles.Count == 0) 
+            {
+                CurrentValue = null;
+                return;
+            }
+
+            var timestamp = Timestamps[TimeIndex];
+            var elevation = SelectedElevation;
+            
+            // Don't try to load if elevation is invalid
+            if (elevation <= 0 || ElevationIndex < 0 || ElevationIndex >= ElevationAngles.Count)
+            {
+                CurrentValue = null;
+                return;
+            }
+            
+            // Try to get value by lat/lon if provided, otherwise use ray/bin 0,0
+            ValueResponse? response = null;
+            try
+            {
+                response = await Http.GetFromJsonAsync<ValueResponse>(
+                    $"api/RadarData/value-geo/{SelectedChannel}/{Uri.EscapeDataString(timestamp)}/{elevation}/{Latitude}/{Longitude}");
+            }
+            catch (Exception ex1)
+            {
+                Logger.LogDebug("Geo lookup failed: {Error}, trying ray/bin fallback", ex1.Message);
+                // Fallback to ray/bin if geo lookup fails
+                try
+                {
+                    response = await Http.GetFromJsonAsync<ValueResponse>(
+                        $"api/RadarData/value/{SelectedChannel}/{Uri.EscapeDataString(timestamp)}/{elevation}/0/0");
+                }
+                catch (Exception ex2)
+                {
+                    Logger.LogWarning("Ray/bin lookup also failed: {Error}", ex2.Message);
+                    response = null;
+                }
+            }
+
+            if (response != null)
+            {
+                CurrentValue = response.Value;
+            }
+            else
+            {
+                CurrentValue = null;
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error loading value");
+            CurrentValue = null;
+        }
+    }
+
+    private async Task OnTimeChanged()
+    {
+        await LoadElevations();
+        await LoadScanMetadata();
+        await LoadValue();
+        await LoadImage();
+        StateHasChanged();
+    }
+
+    private async Task OnElevationChanged()
+    {
+        await LoadScanMetadata();
+        await LoadValue();
+        await LoadImage();
+        StateHasChanged();
+    }
+
+    private async Task OnChannelChanged()
+    {
+        await LoadValue();
+        await LoadImage();
+        StateHasChanged();
+    }
+
+    private async Task OnLocationChanged()
+    {
+        await LoadValue();
+        StateHasChanged();
+    }
+
+    private async Task LoadImage()
+    {
+        if (Http == null) return;
+        try
+        {
+            if (Timestamps.Count == 0 || ElevationAngles.Count == 0)
+            {
+                ImageUrl = null;
+                return;
+            }
+
+            var timestamp = Timestamps[TimeIndex];
+            var elevation = SelectedElevation;
+
+            if (elevation <= 0 || ElevationIndex < 0 || ElevationIndex >= ElevationAngles.Count)
+            {
+                ImageUrl = null;
+                return;
+            }
+
+            // Create image URL with cache busting
+            var imageUrl = $"api/RadarData/image/{SelectedChannel}/{Uri.EscapeDataString(timestamp)}/{elevation}?t={DateTime.Now.Ticks}";
+            ImageUrl = imageUrl;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error loading image");
+            ImageUrl = null;
+        }
+    }
+
+    // DTOs
+    public class MetadataResponse
+    {
+        public TimeRangeDto? TimeRange { get; set; }
+        public int Count { get; set; }
+        public string[] Channels { get; set; } = Array.Empty<string>();
+    }
+
+    public class TimeRangeDto
+    {
+        public DateTime Start { get; set; }
+        public DateTime End { get; set; }
+    }
+
+    public class ScanMetadataDto
+    {
+        public string Timestamp { get; set; } = "";
+        public float ElevationAngle { get; set; }
+        public int NRays { get; set; }
+        public int NBins { get; set; }
+        public float Latitude { get; set; }
+        public float Longitude { get; set; }
+        public float Height { get; set; }
+        public float RScale { get; set; }
+        public float RStart { get; set; }
+    }
+
+    public class ValueResponse
+    {
+        public float Value { get; set; }
+    }
+}
+
+<style>
+    .radar-viewer-container {
+        display: flex;
+        gap: 20px;
+        padding: 20px;
+        height: 100vh;
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    }
+
+    .controls-panel {
+        width: 300px;
+        padding: 20px;
+        background-color: #f5f5f5;
+        border-radius: 8px;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        overflow-y: auto;
+        max-height: calc(100vh - 40px);
+    }
+
+    .controls-panel h3 {
+        margin-top: 0;
+        margin-bottom: 20px;
+        color: #333;
+        border-bottom: 2px solid #ddd;
+        padding-bottom: 10px;
+    }
+
+    .control-group {
+        margin-bottom: 20px;
+    }
+
+    .control-group label {
+        display: block;
+        margin-bottom: 8px;
+        font-weight: 500;
+        color: #555;
+    }
+
+    .form-control {
+        width: 100%;
+        padding: 8px 12px;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        font-size: 14px;
+        box-sizing: border-box;
+    }
+
+    .slider {
+        width: 100%;
+        height: 8px;
+        border-radius: 5px;
+        background: #ddd;
+        outline: none;
+        -webkit-appearance: none;
+    }
+
+    .slider::-webkit-slider-thumb {
+        -webkit-appearance: none;
+        appearance: none;
+        width: 20px;
+        height: 20px;
+        border-radius: 50%;
+        background: #4CAF50;
+        cursor: pointer;
+    }
+
+    .slider::-moz-range-thumb {
+        width: 20px;
+        height: 20px;
+        border-radius: 50%;
+        background: #4CAF50;
+        cursor: pointer;
+        border: none;
+    }
+
+    .slider:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+    }
+
+    .slider-labels {
+        display: flex;
+        justify-content: space-between;
+        margin-top: 5px;
+        font-size: 12px;
+        color: #666;
+    }
+
+    .value-display {
+        padding: 15px;
+        background-color: #e3f2fd;
+        border-radius: 4px;
+        text-align: center;
+    }
+
+    .value-text {
+        display: block;
+        font-size: 24px;
+        font-weight: bold;
+        color: #1976d2;
+        margin-top: 5px;
+    }
+
+    .value-text.no-data {
+        color: #999;
+        font-size: 18px;
+    }
+
+    .metadata {
+        margin-top: 20px;
+        padding-top: 20px;
+        border-top: 1px solid #ddd;
+    }
+
+    .metadata h4 {
+        margin-top: 0;
+        margin-bottom: 10px;
+        font-size: 16px;
+        color: #333;
+    }
+
+    .metadata-item {
+        display: flex;
+        justify-content: space-between;
+        padding: 5px 0;
+        font-size: 14px;
+        color: #666;
+    }
+
+    .error-message {
+        padding: 10px;
+        background-color: #ffebee;
+        color: #c62828;
+        border-radius: 4px;
+        margin-top: 10px;
+        font-size: 14px;
+    }
+
+    .viewer-main {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        background-color: white;
+        border-radius: 8px;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        overflow: hidden;
+    }
+
+    .status-bar {
+        padding: 10px 20px;
+        background-color: #f5f5f5;
+        border-bottom: 1px solid #ddd;
+        font-size: 14px;
+        color: #666;
+    }
+
+    .image-container {
+        flex: 1;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        padding: 20px;
+        overflow: auto;
+        background-color: #f0f0f0;
+    }
+
+    .radar-image {
+        max-width: 100%;
+        max-height: 100%;
+        object-fit: contain;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    }
+
+    .loading-message {
+        color: #666;
+        font-size: 16px;
+        padding: 40px;
+    }
+
+    .canvas-placeholder {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        color: #999;
+        padding: 40px;
+    }
+
+    .canvas-placeholder p {
+        margin: 10px 0;
+    }
+
+    .hint {
+        font-size: 14px;
+        font-style: italic;
+    }
+</style>
+
