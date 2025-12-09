@@ -84,7 +84,8 @@ public class DatasetTests {
 
             var outfile = Path.Combine(DATA_ROOT, $"Projected{key}.png");
             ImageWriter writer = new(projected);
-            writer.SavePNG(outfile, channel: key);
+            writer.SavePNG(outfile, channel: key, includeColorBar: true, 
+                radarLat: (float)radarLat, radarLon: (float)radarLon, gridSpec: gridSpec);
         }
     }
 

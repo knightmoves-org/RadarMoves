@@ -72,6 +72,187 @@ public class ImageWriter(float[,] data) {
     // Convert Rgba32 to hex color string for SVG
     private static string ColorToHex(Rgba32 color) => $"#{color.R:X2}{color.G:X2}{color.B:X2}";
 
+    // Draw range rings on PNG image
+    private static void DrawRangeRingsPNG(Image<Rgba32> image, float radarLat, float radarLon, EWRPolarScan.GridSpec gridSpec, int imageDataWidth, int imageDataHeight) {
+        // Range rings in nautical miles
+        float[] rangeRingsNm = [5f, 10f, 25f, 50f];
+
+        // Convert nautical miles to meters (1 nautical mile = 1852 meters)
+        const float nmToMeters = 1852f;
+        // Approximate degrees per meter: 1 degree latitude ≈ 111,000 meters
+        // For longitude, it varies with latitude: 1 degree longitude ≈ 111,000 * cos(latitude) meters
+        const float metersPerDegreeLat = 111000f;
+
+        // Calculate radar center position in pixels (only on main image area, not color bar)
+        float centerX = (radarLon - gridSpec.LonMin) / gridSpec.LonRes;
+        float centerY = (gridSpec.LatMax - radarLat) / gridSpec.LatRes; // y=0 is top (north)
+
+        // Validate center is within bounds
+        if (float.IsNaN(centerX) || float.IsNaN(centerY) || float.IsInfinity(centerX) || float.IsInfinity(centerY)) {
+            return; // Invalid center, skip drawing
+        }
+
+        // Semi-transparent red color for range rings (alpha = 180/255 ≈ 70% opacity)
+        // Using fully opaque for debugging - will make semi-transparent after verification
+        var red = new Rgba32(255, 0, 0, 255);
+
+        // First, draw all the circles directly on the image (outside Mutate block)
+        foreach (float rangeNm in rangeRingsNm) {
+            float rangeMeters = rangeNm * nmToMeters;
+            // Convert to degrees (use latitude for approximation, longitude will be similar at mid-latitudes)
+            float rangeDegreesLat = rangeMeters / metersPerDegreeLat;
+            float rangeDegreesLon = rangeMeters / (metersPerDegreeLat * MathF.Cos(radarLat * MathF.PI / 180f));
+
+            // Calculate radius in pixels (use average of lat/lon conversions)
+            float radiusPixelsLat = rangeDegreesLat / gridSpec.LatRes;
+            float radiusPixelsLon = rangeDegreesLon / gridSpec.LonRes;
+            float radiusPixels = (radiusPixelsLat + radiusPixelsLon) / 2f;
+
+            // Validate radius
+            if (float.IsNaN(radiusPixels) || float.IsInfinity(radiusPixels) || radiusPixels <= 0) {
+                continue; // Skip invalid radius
+            }
+
+            // Draw circle using Bresenham-like algorithm
+            int radius = (int)Math.Round(radiusPixels);
+            int cx = (int)Math.Round(centerX);
+            int cy = (int)Math.Round(centerY);
+
+            // Only draw if center is within reasonable bounds (allow some margin for large rings)
+            if (cx < -imageDataWidth || cx > imageDataWidth * 2 || cy < -imageDataHeight || cy > imageDataHeight * 2) {
+                continue; // Skip this ring if center is way out of bounds
+            }
+
+            // Draw thin circle outline (single pixel width, but draw 2 pixels for visibility)
+            for (int angle = 0; angle < 360; angle++) {
+                double angleRad = angle * Math.PI / 180.0;
+                int x = cx + (int)Math.Round(radius * Math.Cos(angleRad));
+                int y = cy + (int)Math.Round(radius * Math.Sin(angleRad));
+
+                // Only draw on main image area (not color bar)
+                // Draw a 2x2 pixel block for better visibility
+                for (int dx = -1; dx <= 1; dx++) {
+                    for (int dy = -1; dy <= 1; dy++) {
+                        int px = x + dx;
+                        int py = y + dy;
+                        if (px >= 0 && px < imageDataWidth && py >= 0 && py < imageDataHeight) {
+                            // For debugging: use fully opaque red
+                            // Later: blend with existing pixel for transparency
+                            image[px, py] = red;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Then, add text labels using Mutate (for font rendering)
+        try {
+            var fontCollection = new FontCollection();
+            fontCollection.AddSystemFonts();
+            FontFamily fontFamily;
+            if (fontCollection.Families.Any()) {
+                fontFamily = fontCollection.Families.First();
+            } else {
+                fontFamily = fontCollection.Add("Arial");
+            }
+            var font = fontFamily.CreateFont(10, FontStyle.Bold);
+
+            image.Mutate(ctx => {
+                foreach (float rangeNm in rangeRingsNm) {
+                    float rangeMeters = rangeNm * nmToMeters;
+                    float rangeDegreesLat = rangeMeters / metersPerDegreeLat;
+                    float rangeDegreesLon = rangeMeters / (metersPerDegreeLat * MathF.Cos(radarLat * MathF.PI / 180f));
+
+                    float radiusPixelsLat = rangeDegreesLat / gridSpec.LatRes;
+                    float radiusPixelsLon = rangeDegreesLon / gridSpec.LonRes;
+                    float radiusPixels = (radiusPixelsLat + radiusPixelsLon) / 2f;
+
+                    int radius = (int)Math.Round(radiusPixels);
+                    int cx = (int)Math.Round(centerX);
+                    int cy = (int)Math.Round(centerY);
+
+                    // Add label at the top of the ring (north, angle = -90 degrees)
+                    double labelAngleRad = -90.0 * Math.PI / 180.0; // Top (north)
+                    float labelX = cx + (float)(radius * Math.Cos(labelAngleRad));
+                    float labelY = cy + (float)(radius * Math.Sin(labelAngleRad)) - 5; // Offset slightly above ring
+
+                    string labelText = $"{rangeNm:F0} nm";
+                    var textOptions = new RichTextOptions(font) {
+                        Origin = new PointF(labelX, labelY),
+                        HorizontalAlignment = HorizontalAlignment.Center,
+                        VerticalAlignment = VerticalAlignment.Bottom
+                    };
+                    // Use semi-transparent red color (alpha = 180/255 ≈ 70% opacity)
+                    var labelColor = new Color(new Rgba32(255, 0, 0, 180));
+                    ctx.DrawText(textOptions, labelText, labelColor);
+                }
+            });
+        } catch {
+            // If font rendering fails, labels are skipped but rings are already drawn
+        }
+    }
+
+    // Draw range rings on SVG image
+    private static void DrawRangeRingsSVG(XElement svgRoot, XNamespace svgNs, float radarLat, float radarLon,
+        EWRPolarScan.GridSpec gridSpec, int cellSize) {
+        // Range rings in nautical miles
+        float[] rangeRingsNm = [5f, 10f, 25f, 50f];
+
+        // Convert nautical miles to meters (1 nautical mile = 1852 meters)
+        const float nmToMeters = 1852f;
+        // Approximate degrees per meter: 1 degree latitude ≈ 111,000 meters
+        const float metersPerDegreeLat = 111000f;
+
+        // Calculate radar center position in pixels (scaled by cellSize)
+        float centerX = (radarLon - gridSpec.LonMin) / gridSpec.LonRes * cellSize;
+        float centerY = (gridSpec.LatMax - radarLat) / gridSpec.LatRes * cellSize; // y=0 is top (north)
+
+        foreach (float rangeNm in rangeRingsNm) {
+            float rangeMeters = rangeNm * nmToMeters;
+            // Convert to degrees (use latitude for approximation, longitude will be similar at mid-latitudes)
+            float rangeDegreesLat = rangeMeters / metersPerDegreeLat;
+            float rangeDegreesLon = rangeMeters / (metersPerDegreeLat * MathF.Cos(radarLat * MathF.PI / 180f));
+
+            // Calculate radius in pixels (scaled by cellSize)
+            float radiusPixelsLat = (rangeDegreesLat / gridSpec.LatRes) * cellSize;
+            float radiusPixelsLon = (rangeDegreesLon / gridSpec.LonRes) * cellSize;
+            float radiusPixels = (radiusPixelsLat + radiusPixelsLon) / 2f;
+
+            // Create circle element with thin, semi-transparent stroke
+            XElement circle = new(
+                svgNs + "circle",
+                new XAttribute("cx", centerX),
+                new XAttribute("cy", centerY),
+                new XAttribute("r", radiusPixels),
+                new XAttribute("fill", "none"),
+                new XAttribute("stroke", "red"),
+                new XAttribute("stroke-width", "1"),
+                new XAttribute("stroke-opacity", "0.7")
+            );
+            svgRoot.Add(circle);
+
+            // Add label at the top of the ring (north, angle = -90 degrees)
+            double labelAngleRad = -90.0 * Math.PI / 180.0; // Top (north)
+            float labelX = centerX + (float)(radiusPixels * Math.Cos(labelAngleRad));
+            float labelY = centerY + (float)(radiusPixels * Math.Sin(labelAngleRad)) - 5; // Offset slightly above ring
+
+            string labelText = $"{rangeNm:F0} nm";
+            XElement text = new(
+                svgNs + "text",
+                new XAttribute("x", labelX),
+                new XAttribute("y", labelY),
+                new XAttribute("fill", "red"),
+                new XAttribute("fill-opacity", "0.7"),
+                new XAttribute("font-size", "10"),
+                new XAttribute("font-weight", "bold"),
+                new XAttribute("text-anchor", "middle"),
+                new XAttribute("dominant-baseline", "bottom"),
+                labelText
+            );
+            svgRoot.Add(text);
+        }
+    }
+
     // Find min/max values in the data array (ignoring NaNs and NoDataValue)
     private static (float min, float max, float range) GetNormalizationRange(float[,] data) {
         int height = data.GetLength(0);
@@ -93,47 +274,50 @@ public class ImageWriter(float[,] data) {
         if (range == 0) range = 1f;
         return (min, max, range);
     }
-    public void Save(string filePath) {
-        Save(filePath, null);
+    public void Save(string filePath, float? radarLat = null, float? radarLon = null, EWRPolarScan.GridSpec? gridSpec = null) {
+        Save(filePath, null, radarLat, radarLon, gridSpec);
     }
 
     /// <summary>
     /// Saves the image using standard thresholds for the specified channel.
     /// </summary>
-    public void Save(string filePath, Channel? channel) {
+    public void Save(string filePath, Channel? channel, float? radarLat = null, float? radarLon = null, EWRPolarScan.GridSpec? gridSpec = null) {
         if (filePath.EndsWith(".png")) {
             if (channel.HasValue) {
-                SavePNG(filePath, channel.Value);
+                SavePNG(filePath, channel.Value, true, radarLat, radarLon, gridSpec);
             } else {
-                SavePNG(filePath);
+                SavePNG(filePath, true, radarLat, radarLon, gridSpec);
             }
         } else if (filePath.EndsWith(".svg")) {
             if (channel.HasValue) {
-                SaveSVG(filePath, channel.Value);
+                SaveSVG(filePath, channel.Value, 5, true, radarLat, radarLon, gridSpec);
             } else {
-                SaveSVG(filePath);
+                SaveSVG(filePath, 5, true, radarLat, radarLon, gridSpec);
             }
         } else {
             throw new ArgumentException("Invalid file extension. Must be .png or .svg.");
         }
     }
 
-    public void SavePNG(string filePath, bool includeColorBar = true) {
-        SavePNG(filePath, null, null, includeColorBar);
+    public void SavePNG(string filePath, bool includeColorBar = true,
+        float? radarLat = null, float? radarLon = null, EWRPolarScan.GridSpec? gridSpec = null) {
+        SavePNG(filePath, null, null, includeColorBar, radarLat, radarLon, gridSpec);
     }
 
     /// <summary>
     /// Saves the image as PNG using standard thresholds for the specified channel.
     /// </summary>
-    public void SavePNG(string filePath, Channel channel, bool includeColorBar = true) {
+    public void SavePNG(string filePath, Channel channel, bool includeColorBar = true,
+        float? radarLat = null, float? radarLon = null, EWRPolarScan.GridSpec? gridSpec = null) {
         var threshold = ImageThreshold.Get(channel);
-        SavePNG(filePath, threshold.ValueMin, threshold.ValueMax, includeColorBar);
+        SavePNG(filePath, threshold.ValueMin, threshold.ValueMax, includeColorBar, radarLat, radarLon, gridSpec);
     }
 
     /// <summary>
     /// Saves the image as PNG with explicit min/max values for normalization.
     /// </summary>
-    public void SavePNG(string filePath, float? minValue, float? maxValue, bool includeColorBar = true) {
+    public void SavePNG(string filePath, float? minValue, float? maxValue, bool includeColorBar = true,
+        float? radarLat = null, float? radarLon = null, EWRPolarScan.GridSpec? gridSpec = null) {
         float min, max, range;
 
         if (minValue.HasValue && maxValue.HasValue) {
@@ -173,6 +357,11 @@ public class ImageWriter(float[,] data) {
                     image[x, y] = JetColor(t);
                 }
             }
+        }
+
+        // Draw range rings if radar location and grid spec are provided
+        if (radarLat.HasValue && radarLon.HasValue && gridSpec.HasValue) {
+            DrawRangeRingsPNG(image, radarLat.Value, radarLon.Value, gridSpec.Value, Width, Height);
         }
 
         // Draw color bar
@@ -278,22 +467,25 @@ public class ImageWriter(float[,] data) {
 
 
 
-    public void SaveSVG(string filePath, int cellSize = 5, bool includeColorBar = true) {
-        SaveSVG(filePath, cellSize, null, null, includeColorBar);
+    public void SaveSVG(string filePath, int cellSize = 5, bool includeColorBar = true,
+        float? radarLat = null, float? radarLon = null, EWRPolarScan.GridSpec? gridSpec = null) {
+        SaveSVG(filePath, cellSize, null, null, includeColorBar, radarLat, radarLon, gridSpec);
     }
 
     /// <summary>
     /// Saves the image as SVG using standard thresholds for the specified channel.
     /// </summary>
-    public void SaveSVG(string filePath, Channel channel, int cellSize = 5, bool includeColorBar = true) {
+    public void SaveSVG(string filePath, Channel channel, int cellSize = 5, bool includeColorBar = true,
+        float? radarLat = null, float? radarLon = null, EWRPolarScan.GridSpec? gridSpec = null) {
         var threshold = ImageThreshold.Get(channel);
-        SaveSVG(filePath, cellSize, threshold.ValueMin, threshold.ValueMax, includeColorBar);
+        SaveSVG(filePath, cellSize, threshold.ValueMin, threshold.ValueMax, includeColorBar, radarLat, radarLon, gridSpec);
     }
 
     /// <summary>
     /// Saves the image as SVG with explicit min/max values for normalization.
     /// </summary>
-    public void SaveSVG(string filePath, int cellSize, float? minValue, float? maxValue, bool includeColorBar = true) {
+    public void SaveSVG(string filePath, int cellSize, float? minValue, float? maxValue, bool includeColorBar = true,
+        float? radarLat = null, float? radarLon = null, EWRPolarScan.GridSpec? gridSpec = null) {
         // the purpose of the cellSize is to scale the image to the desired size
         float min, max, range;
 
@@ -354,6 +546,11 @@ public class ImageWriter(float[,] data) {
                 );
                 svgRoot.Add(rect);
             }
+        }
+
+        // Draw range rings if radar location and grid spec are provided
+        if (radarLat.HasValue && radarLon.HasValue && gridSpec.HasValue) {
+            DrawRangeRingsSVG(svgRoot, svgNs, radarLat.Value, radarLon.Value, gridSpec.Value, cellSize);
         }
 
         // Draw color bar
