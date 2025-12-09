@@ -1,10 +1,11 @@
 
 using System.Buffers;
 using System.Runtime.CompilerServices;
+using System.Numerics;
 
 namespace RadarMoves.Server.Data;
 
-public class Median3RaysFilter : IRadarFilter {
+public class Median3RaysFilter : IRadarFilter<float> {
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static float Median3(float a, float b, float c) {
         if (a > b) (a, b) = (b, a);
@@ -13,9 +14,10 @@ public class Median3RaysFilter : IRadarFilter {
         return b;
     }
 
-    public void Apply(Span2D grid) {
-        int nR = grid.NRays;
-        int nB = grid.NBins;
+    public void Apply(Span2D<float> grid) {
+
+        int nR = grid.Y;
+        int nB = grid.X;
 
         for (int b = 0; b < nB; b++) {
             for (int r = 0; r < nR; r++) {
@@ -28,7 +30,7 @@ public class Median3RaysFilter : IRadarFilter {
         }
     }
 }
-public class Median5BinsFilter : IRadarFilter {
+public class Median5BinsFilter : IRadarFilter<float> {
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static float Median5(float a, float b, float c, float d, float e) {
         if (a > b) (a, b) = (b, a);
@@ -42,9 +44,9 @@ public class Median5BinsFilter : IRadarFilter {
         return c;
     }
 
-    public void Apply(Span2D grid) {
-        int nR = grid.NRays;
-        int nB = grid.NBins;
+    public void Apply(Span2D<float> grid) {
+        int nR = grid.Y;
+        int nB = grid.X;
 
         for (int r = 0; r < nR; r++) {
             for (int b = 2; b < nB - 2; b++) {
@@ -59,7 +61,7 @@ public class Median5BinsFilter : IRadarFilter {
         }
     }
 }
-public class ThresholdFilter : IRadarFilter {
+public class ThresholdFilter : IRadarFilter<float> {
     private readonly float _min;
     private readonly float _max;
 
@@ -68,9 +70,9 @@ public class ThresholdFilter : IRadarFilter {
         _max = max;
     }
 
-    public void Apply(Span2D grid) {
-        int nR = grid.NRays;
-        int nB = grid.NBins;
+    public void Apply(Span2D<float> grid) {
+        int nR = grid.Y;
+        int nB = grid.X;
 
         for (int r = 0; r < nR; r++)
             for (int b = 0; b < nB; b++) {
@@ -80,7 +82,7 @@ public class ThresholdFilter : IRadarFilter {
             }
     }
 }
-public class GateClutterFilter : IRadarFilter {
+public class GateClutterFilter : IRadarFilter<float> {
     private readonly int _window;
     private readonly float _stdThresh;
 
@@ -89,9 +91,10 @@ public class GateClutterFilter : IRadarFilter {
         _stdThresh = stdThresh;
     }
 
-    public void Apply(Span2D grid) {
-        int nR = grid.NRays;
-        int nB = grid.NBins;
+    public void Apply(Span2D<float> grid) {
+
+        int nR = grid.Y;
+        int nB = grid.X;
         int r = _window / 2;
 
         for (int b = 0; b < nB; b++) {
@@ -122,20 +125,17 @@ public class GateClutterFilter : IRadarFilter {
         }
     }
 }
-public class SpeckleRemovalFilter : IRadarFilter {
-    private readonly int _minArea;
+public class SpeckleRemovalFilter(float threshold = 0.0f, int minArea = 5) : IRadarFilter<float> {
+    private readonly float _threshold = threshold;
+    private readonly int _minArea = minArea;
 
-    public SpeckleRemovalFilter(int minArea = 5) {
-        _minArea = minArea;
-    }
-
-    public void Apply(Span2D grid) {
-        int nR = grid.NRays;
-        int nB = grid.NBins;
+    public void Apply(Span2D<float> grid) {
+        int nR = grid.Y;
+        int nB = grid.X;
 
         bool[,] visited = new bool[nR, nB];
-        int[] dr = { 1, -1, 0, 0 };
-        int[] db = { 0, 0, 1, -1 };
+        int[] dr = [1, -1, 0, 0];
+        int[] db = [0, 0, 1, -1];
 
         for (int r = 0; r < nR; r++) {
             for (int b = 0; b < nB; b++) {
@@ -171,11 +171,106 @@ public class SpeckleRemovalFilter : IRadarFilter {
             }
         }
     }
+
+    public void Apply2(Span2D<float> data) {
+        int rows = data.Y;
+        int cols = data.X;
+
+        // Label grid same size as radar data
+        int[,] labelsArr = new int[rows, cols];
+        var labels = labelsArr.AsSpan();
+
+        // Union-find parent table (worst case each pixel gets a label)
+        int maxLabels = rows * cols / 2 + 1;
+        int[] parent = new int[maxLabels];
+        int nextLabel = 1;
+
+        // ---------- FIRST PASS ----------
+        for (int y = 0; y < rows; y++) {
+            var row = data.GetRowSpan(y);
+            var lblRow = labels.GetRowSpan(y);
+
+            for (int x = 0; x < cols; x++) {
+                if (row[x] < _threshold) {
+                    // not foreground
+                    lblRow[x] = 0;
+                    continue;
+                }
+
+                int left = (x > 0) ? lblRow[x - 1] : 0;
+                int up = (y > 0) ? labels[y - 1, x] : 0;
+
+                if (left == 0 && up == 0) {
+                    // New label
+                    lblRow[x] = nextLabel;
+                    parent[nextLabel] = nextLabel;
+                    nextLabel++;
+                } else if (left != 0 && up != 0) {
+                    // Both labels exist -> unify
+                    int l = Find(parent, left);
+                    int u = Find(parent, up);
+
+                    if (l != u)
+                        Union(parent, l, u);
+
+                    lblRow[x] = l;
+                } else {
+                    // One neighbor has label
+                    lblRow[x] = left != 0 ? left : up;
+                }
+            }
+        }
+
+        // ---------- SECOND PASS ----------
+        // Resolve label roots + count areas
+        int[] area = new int[nextLabel + 1];
+
+        for (int y = 0; y < rows; y++) {
+            var lbl = labels.GetRowSpan(y);
+            for (int x = 0; x < cols; x++) {
+                int v = lbl[x];
+                if (v != 0) {
+                    int root = Find(parent, v);
+                    lbl[x] = root;
+                    area[root]++;
+                }
+            }
+        }
+
+        // ---------- THIRD PASS ----------
+        // Remove tiny speckles
+        for (int y = 0; y < rows; y++) {
+            var row = data.GetRowSpan(y);
+            var lbl = labels.GetRowSpan(y);
+
+            for (int x = 0; x < cols; x++) {
+                int id = lbl[x];
+                if (id != 0 && area[id] < _minArea)
+                    row[x] = float.NaN; // or row[x] = _threshold - 1f;
+            }
+        }
+    }
+
+    // Union-Find helpers (very small, very fast)
+    private static int Find(int[] parent, int x) {
+        while (parent[x] != x) {
+            parent[x] = parent[parent[x]]; // path compression
+            x = parent[x];
+        }
+        return x;
+    }
+
+    private static void Union(int[] parent, int a, int b) {
+        int ra = Find(parent, a);
+        int rb = Find(parent, b);
+        if (ra != rb)
+            parent[rb] = ra;
+    }
 }
 
 
 
-public class GaussianFilter : IRadarFilter {
+public class GaussianFilter : IRadarFilter<float> {
     private readonly float[] _kernel;
     private readonly int _radius;
 
@@ -193,13 +288,13 @@ public class GaussianFilter : IRadarFilter {
             _kernel[i] /= sum;
     }
 
-    public void Apply(Span2D grid) {
-        int nR = grid.NRays;
-        int nB = grid.NBins;
+    public void Apply(Span2D<float> grid) {
+        int nR = grid.Y;
+        int nB = grid.X;
         int total = nR * nB;
 
         float[] tmp = ArrayPool<float>.Shared.Rent(total);
-        var tmpGrid = new Span2D(tmp.AsSpan(0, total), nR, nB);
+        var tmpGrid = new Span2D<float>(tmp.AsSpan(0, total), nR, nB);
 
         // Horizontal pass
         for (int b = 0; b < nB; b++) {
@@ -228,5 +323,75 @@ public class GaussianFilter : IRadarFilter {
         }
 
         ArrayPool<float>.Shared.Return(tmp);
+    }
+    public void ApplyOld(Span2D<float> data) {
+        var (rows, cols) = data.Shape();
+
+        // Temp buffer for vertical pass
+        float[,] temp = new float[rows, cols];
+        var temp2D = temp.AsSpan();
+
+        HorizontalPass(data, temp2D);
+        VerticalPass(temp2D, data);
+    }
+
+    private void HorizontalPass(Span2D<float> input, Span2D<float> output) {
+        var (rows, cols) = input.Shape();
+        int vSize = Vector<float>.Count;
+
+        for (int y = 0; y < rows; y++) {
+            var rowIn = input.GetRowSpan(y);
+            var rowOut = output.GetRowSpan(y);
+
+            for (int x = 0; x < cols; x++) {
+                Vector<float> sumVec = Vector<float>.Zero;
+                float sumScalar = 0f;
+
+                // Convolve
+                for (int k = -_radius; k <= _radius; k++) {
+                    int xx = x + k;
+                    if ((uint)xx >= (uint)cols)
+                        continue;
+
+                    float w = _kernel[k + _radius];
+
+                    int remaining = cols - xx;
+                    if (remaining >= vSize) {
+                        var v = new Vector<float>(rowIn.Slice(xx));
+                        sumVec += v * new Vector<float>(w);
+                    } else {
+                        sumScalar += rowIn[xx] * w;
+                    }
+                }
+
+                float total = sumScalar;
+                for (int i = 0; i < vSize; i++)
+                    total += sumVec[i];
+
+                rowOut[x] = total;
+            }
+        }
+    }
+
+    private void VerticalPass(Span2D<float> input, Span2D<float> output) {
+        var (rows, cols) = input.Shape();
+
+
+        for (int x = 0; x < cols; x++) {
+            for (int y = 0; y < rows; y++) {
+                float accum = 0f;
+
+                for (int k = -_radius; k <= _radius; k++) {
+                    int yy = y + k;
+                    if ((uint)yy >= (uint)rows)
+                        continue;
+
+                    float w = _kernel[k + _radius];
+                    accum += input[yy, x] * w;
+                }
+
+                output[y, x] = accum;
+            }
+        }
     }
 }

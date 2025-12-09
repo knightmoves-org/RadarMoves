@@ -1,14 +1,12 @@
+using System.Xml.Linq;
+
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
 using SixLabors.ImageSharp.Drawing.Processing;
 using SixLabors.ImageSharp.Processing;
 using SixLabors.Fonts;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Xml.Linq;
 
-namespace RadarMoves.Server.Dataset;
+namespace RadarMoves.Server.Data;
 
 /// <summary>
 /// Represents the threshold range (min/max) for a radar channel.
@@ -253,7 +251,7 @@ public class ImageWriter(float[,] data) {
         }
     }
 
-    // Find min/max values in the data array (ignoring NaNs and NoDataValue)
+    // Find min/max values in the data array (ignoring NaNs and NoData)
     private static (float min, float max, float range) GetNormalizationRange(float[,] data) {
         int height = data.GetLength(0);
         int width = data.GetLength(1);
@@ -263,7 +261,7 @@ public class ImageWriter(float[,] data) {
         for (int y = 0; y < height; y++) {
             for (int x = 0; x < width; x++) {
                 float v = data[y, x];
-                if (float.IsNaN(v) || v == EWRPolarScan.NoDataValue) continue;  // ignore NaNs and NoDataValue
+                if (float.IsNaN(v) || v == EWRPolarScan.NoData) continue;  // ignore NaNs and NoData
 
                 if (v < min) min = v;
                 if (v > max) max = v;
@@ -348,10 +346,10 @@ public class ImageWriter(float[,] data) {
                 float val = Data[y, x];
                 if (float.IsNaN(val)) {
                     image[x, y] = transparent; // NaN values are transparent
-                                               // } else if (val == EWRPolarScan.NoDataValue) {
-                                               // if closest to NoDataValue, render as black
-                } else if (Math.Abs(val - EWRPolarScan.NoDataValue) < 1e-6) {
-                    image[x, y] = black; // NoDataValue (-9999f) renders as black
+                                               // } else if (val == EWRPolarScan.NoData) {
+                                               // if closest to NoData, render as black
+                } else if (Math.Abs(val - EWRPolarScan.NoData) < 1e-6) {
+                    image[x, y] = black; // NoData (-9999f) renders as black
                 } else {
                     float t = (val - min) / range;
                     image[x, y] = JetColor(t);
@@ -526,8 +524,8 @@ public class ImageWriter(float[,] data) {
 
                 if (float.IsNaN(val)) {
                     fillColor = "transparent"; // NaN values are transparent
-                } else if (Math.Abs(val - EWRPolarScan.NoDataValue) < 1e-6) {
-                    fillColor = "black"; // NoDataValue (-9999f) renders as black
+                } else if (Math.Abs(val - EWRPolarScan.NoData) < 1e-6) {
+                    fillColor = "black"; // NoData (-9999f) renders as black
                 } else {
                     float t = (val - min) / range;
                     Rgba32 color = JetColor(t);

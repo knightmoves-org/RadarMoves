@@ -6,10 +6,9 @@ using PureHDF.VOL.Native;
 using System.IO.MemoryMappedFiles;
 using static System.Math;
 
-using RadarMoves.Server.Data;
 
 
-namespace RadarMoves.Server.Dataset;
+namespace RadarMoves.Server.Data;
 public enum Channel {
     TotalPower,    // data1 # TH
     Reflectivity,  // data2 # DBZH
@@ -52,23 +51,13 @@ public static class IH5GroupExtensions {
     }
 }
 
-public static class ArrayExtensions {
-    public static void Fill<T>(this T[,] array, T value) where T : unmanaged {
-        // var result = new T[array.GetLength(0), array.GetLength(1)];
-        for (int y = 0; y < array.GetLength(0); y++) {
-            for (int x = 0; x < array.GetLength(1); x++) {
-                array[y, x] = value;
-            }
-        }
-
-    }
-}
 
 // Opera Data Information Model (ODIM) HDF5 dataset
-public sealed class EWRPolarScan : IDisposable {
+public sealed class EWRPolarScan : IDisposable, IRadarDataset<float> {
     // ------------------------------------------------------------------------------------------------------------- //
     // TODO: Move to a separate class
     // ------------------------------------------------------------------------------------------------------------- //
+    public const float NoData = -9999f;
     public const double Re = 6_371_000.0;
     public const double Re43 = Re * (4.0 / 3.0);
     private const double DEG2RAD = PI / 180.0;
@@ -113,11 +102,19 @@ public sealed class EWRPolarScan : IDisposable {
     public readonly float RStart;
     public readonly float A1GateDeg;
     public readonly float[] Azimuths;
-    private readonly float[][,] _data;
+    private readonly float[][,] _raw;
     private (double[,] latitude, double[,] longitude, double[,] height, (float latMin, float latMax, float lonMin, float lonMax))? _cachedGeodetic;
     public IEnumerable<Channel> Keys => Enum.GetValues<Channel>();
-    public IEnumerable<float[,]> Values => _data;
-    public float[,] this[Channel c] => _data[(int)c];
+    public float[][,] Raw => _raw;
+    public IEnumerable<float[,]> Values => _raw;
+    public float[,] GetFilteredData(Channel c) {
+        var filter = new SpeckleRemovalFilter(threshold: 1.0f, minArea: 32);
+        var grid = _raw[(int)c].AsSpan();
+        filter.Apply(grid);
+        return grid.AsArray();
+    }
+    public float[,] this[Channel c] => GetFilteredData(c);
+    public float[,] this[int idx] => this[(Channel)idx];
     public void Dispose() {
         _file?.Dispose();
         GC.SuppressFinalize(this);
@@ -159,12 +156,10 @@ public sealed class EWRPolarScan : IDisposable {
 
 
         string[] keys = ["data1", "data2", "data3", "data4"];
-        _data = new float[keys.Length][,];
 
 
-        IRadarFilter[] filters = [
-            new GaussianFilter(sigma: 1.5f, radius: 2),
-        ];
+        _raw = new float[keys.Length][,];
+
         for (int k = 0; k < keys.Length; k++) {
             var key = keys[k];
             var g = root.Group(key);
@@ -175,22 +170,19 @@ public sealed class EWRPolarScan : IDisposable {
 
             if (gain != 1.0f || offset != 0.0f) {
                 // Allocate the array before writing to it
-                _data[k] = new float[NRays, NBins];
+                _raw[k] = new float[NRays, NBins];
                 for (int i = 0; i < NRays; i++)
                     for (int j = 0; j < NBins; j++)
-                        _data[k][i, j] = src[i, j] * gain + offset;
+                        _raw[k][i, j] = src[i, j] * gain + offset;
             } else {
-                _data[k] = src;
+                _raw[k] = src;
             }
 
-            // Apply filters to the data
-            var grid = new Span2D(_data[k]);
-            foreach (var f in filters)
-                f.Apply(grid);
-            _data[k] = grid.ToArray();
+
         }
         _cachedGeodetic = null;
     }
+
 
 
     // ------------------------------------------------------------------------------------------------------------- //
@@ -208,8 +200,6 @@ public sealed class EWRPolarScan : IDisposable {
         if (vectorWidth > 1) {
             var rv = new Vector<double>(RScale);
             var rstartVec = new Vector<double>(RStart + offset);
-            // var idxInc = Vector<double>.One * vectorWidth;
-            // construct base indices vector [0,1,2,...]
             var baseIdx = new double[vectorWidth];
             for (int k = 0; k < vectorWidth; k++) baseIdx[k] = k;
             var idxVec = new Vector<double>(baseIdx);
@@ -282,7 +272,7 @@ public sealed class EWRPolarScan : IDisposable {
         float lonMax = float.MinValue;
 
         // Use object to hold thread-local state for synchronization
-        object lockObj = new object();
+        object lockObj = new();
 
         Parallel.For(0, NRays,
             // localInit - initialize thread-local min/max values
@@ -352,7 +342,7 @@ public sealed class EWRPolarScan : IDisposable {
     /// Special nodata value used to mark pixels outside radar coverage bounds (rendered as black).
     /// NaN is used for other nodata cases (rendered as transparent).
     /// </summary>
-    public const float NoDataValue = -9999f;
+
 
     public (float[,] raster, float[,] latitudes, float[,] longitudes) InterpolateIDW(
         float[,] radarData,
@@ -479,7 +469,9 @@ public sealed class EWRPolarScan : IDisposable {
         );
 
 
-        (float[,] raster, float[,] latitudes, float[,] longitudes, float[,] weights, int[,] counts) final = (new float[height, width], new float[height, width], new float[height, width], new float[height, width], new int[height, width]);
+        (float[,] raster, float[,] latitudes, float[,] longitudes, float[,] weights, int[,] counts) final = (
+            new float[height, width], new float[height, width], new float[height, width], new float[height, width], new int[height, width]
+        );
 
 
         // Initialize final lat/lon to NaN
@@ -568,14 +560,13 @@ public sealed class EWRPolarScan : IDisposable {
                 // Check if pixel is outside radar coverage:
                 // 1. Outside rectangular bounds, OR
                 // 2. Beyond maximum ground range
-                // Pixels inside bounds but with no data should be NaN (transparent), not NoDataValue (black)
-                bool outsideBounds = pixelLat < dataLatMin || pixelLat > dataLatMax ||
-                                     pixelLon < dataLonMin || pixelLon > dataLonMax;
+                // Pixels inside bounds but with no data should be NaN (transparent), not NoData (black)
+                bool outsideBounds = pixelLat < dataLatMin || pixelLat > dataLatMax || pixelLon < dataLonMin || pixelLon > dataLonMax;
                 bool beyondRange = distanceKm > maxGroundRangeKm * 1.05f; // 5% margin for edge cases
 
                 if (outsideBounds || beyondRange) {
                     // Pixel is outside radar coverage bounds - mark as nodata value (will render as black)
-                    output.raster[y, x] = NoDataValue;
+                    output.raster[y, x] = NoData;
                 } else {
                     // Pixel is inside radar coverage bounds
                     // Require both minimum weight AND minimum count of valid values

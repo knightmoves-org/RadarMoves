@@ -1,12 +1,18 @@
-
-using RadarMoves.Server.Dataset;
+using RadarMoves.Server.Data;
 
 
 namespace RadarMoves.Test;
 
 
 public class DatasetTests {
-    public static readonly string DATA_ROOT = Path.Combine(Directory.GetCurrentDirectory(), "..", "..", "..", "..");
+    public static readonly string ROOT = Path.Combine(Directory.GetCurrentDirectory(), "..", "..", "..", "..");
+    public static readonly string DATA_ROOT = Path.Combine(ROOT, "data");
+    public static readonly string EWR_ROOT = Path.Combine(DATA_ROOT, "ewr");
+    public static readonly string DOCUMENTS = Path.Combine(ROOT, "Documents");
+    public static readonly string IMAGES = Path.Combine(DOCUMENTS, "Images");
+
+
+
     [Fact]
     public void EarthRadiusConstant_ShouldBeCorrect() {
         // Arrange & Act
@@ -19,26 +25,18 @@ public class DatasetTests {
     [Fact]
 
     public void Dataset_Constructor_WithValidHdf5File_ShouldInitialize() {
-
-        // Note: This test requires a valid HDF5 file with the following structure:
-        // - Group "where" with attributes: "lat", "lon", "height"
-        // - Group "what" with attributes: "date", "time"
-        // 
-        // To make this test pass, you'll need to:
-        // 1. Create a test HDF5 file with the required structure
-        // 2. Update the path below to point to your test file
-        // 3. Uncomment and adjust the test code below
-        // var root = Path.Combine(Directory.GetCurrentDirectory(), "..", "..", "..", "..");
-        // /home/leaver/RadarMoves/data/EWR250524024617.h5
-        var filename = Path.Combine(DATA_ROOT, "data", "ewr", "EWR250524024617.h5");
-
+        ImageWriter writer;
+        DateTime endBenchmark;
+        DateTime startBenchmark;
+        int height = 1024;
+        int width = 1024;
+        var filename = Path.Combine(EWR_ROOT, "EWR250524024617.h5");
         var ds = new EWRPolarScan(filename);
 
-        // var shape = ds.Shape;
         var groundRange = ds.GroundRange();
 
         Assert.Equal(ds.NBins, groundRange.Length);
-        // Get radar location
+
         double radarLat = ds.Latitude;
         double radarLon = ds.Longitude;
         var (latitude, longitude, _, (latMin, latMax, lonMin, lonMax)) = ds.GetGeodeticCoordinates();
@@ -46,34 +44,23 @@ public class DatasetTests {
 
 
 
-        // Radar moment to remap
-        Console.WriteLine(Channel.Reflectivity);
-        Console.WriteLine((int)Channel.Reflectivity);
-        float[,] radarMoment = ds[Channel.Reflectivity];
-        float vMin = float.MaxValue;
-        float vMax = float.MinValue;
-        for (int i = 0; i < radarMoment.GetLength(0); i++) {
-            for (int j = 0; j < radarMoment.GetLength(1); j++) {
-                if (radarMoment[i, j] < vMin) vMin = radarMoment[i, j];
-                if (radarMoment[i, j] > vMax) vMax = radarMoment[i, j];
-            }
-        }
-        Console.WriteLine($"vMin: {vMin}, vMax: {vMax}");
-        new ImageWriter(radarMoment).Save(Path.Combine(DATA_ROOT, "radarMoment.png"));
-
-        int height = 1024;
-        int width = 1024;
-        // Call the function
-        DateTime endBenchmark;
-        DateTime startBenchmark;
         EWRPolarScan.GridSpec gridSpec = new(lonMin, lonMax, latMin, latMax, width, height);
+        foreach (var k in ds.Keys) {
+            var raw = ds.Raw[(int)k];
+            writer = new(raw);
+            writer.SavePNG(Path.Combine(IMAGES, $"Raw{k}.png"), channel: k, includeColorBar: true);
+            var filtered = ds[k];
+            writer = new(filtered);
+            writer.SavePNG(Path.Combine(IMAGES, $"Filtered{k}.png"), channel: k, includeColorBar: true);
+        }
+
 
         for (int i = 0; i < ds.Keys.Count(); i++) {
             var key = ds.Keys.ElementAt(i);
-            float[,] s = ds[key];
+            float[,] radar = ds[key];
 
             startBenchmark = DateTime.Now;
-            var (projected, latitudes, longitudes) = ds.InterpolateIDW(s, gridSpec, isValid: (v) => !float.IsNaN(v), maxDistance: 1.2f, minWeight: 1.0f, minValidCount: 2);
+            var (projected, latitudes, longitudes) = ds.InterpolateIDW(radar, gridSpec, isValid: (v) => !float.IsNaN(v), maxDistance: 1.2f, minWeight: 1.0f, minValidCount: 2);
             endBenchmark = DateTime.Now;
             Console.WriteLine($"ds.ToRaster in {endBenchmark - startBenchmark}");
             Assert.Equal(projected.GetLength(0), height);
@@ -82,9 +69,9 @@ public class DatasetTests {
 
             // --------- test that the latitudes and longitudes are in the correct order
 
-            var outfile = Path.Combine(DATA_ROOT, $"Projected{key}.png");
-            ImageWriter writer = new(projected);
-            writer.SavePNG(outfile, channel: key, includeColorBar: true, 
+            var outfile = Path.Combine(IMAGES, $"Projected{key}.png");
+            writer = new(projected);
+            writer.SavePNG(outfile, channel: key, includeColorBar: true,
                 radarLat: (float)radarLat, radarLon: (float)radarLon, gridSpec: gridSpec);
         }
     }
@@ -93,7 +80,7 @@ public class DatasetTests {
     public void ToRaster_LatLonOrder_ShouldBeCorrect() {
         // Arrange
 
-        var filename = Path.Combine(DATA_ROOT, "data", "ewr", "EWR250524024617.h5");
+        var filename = Path.Combine(EWR_ROOT, "EWR250524024617.h5");
         var ds = new EWRPolarScan(filename);
         float[,] radarMoment = ds[Channel.Reflectivity];
 
