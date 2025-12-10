@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
 using System.Globalization;
-using System.Text.RegularExpressions;
+using RadarMoves.Server.Data.Indexing;
+using PureHDF;
+using PureHDF.VOL.Native;
 
 namespace RadarMoves.Server.Data;
 
@@ -12,98 +14,56 @@ public class ArchiveRadarDataProvider : IRadarDataProvider {
     private readonly ILogger<ArchiveRadarDataProvider> _logger;
     private readonly ConcurrentDictionary<DateTime, List<string>> _filesByTimestamp = new();
     private readonly Lazy<Task<List<DateTime>>> _timestamps;
+    private readonly Lazy<Task<Series<(DateTime, float), string>>> _series;
+    private readonly ConcurrentDictionary<(DateTime, float), string> _indexToFile = new();
 
     public ArchiveRadarDataProvider(string archivePath, ILogger<ArchiveRadarDataProvider> logger) {
         _archivePath = archivePath ?? throw new ArgumentNullException(nameof(archivePath));
         _logger = logger;
-        _timestamps = new Lazy<Task<List<DateTime>>>(LoadTimestampsAsync);
+        _timestamps = new Lazy<Task<List<DateTime>>>(LoadTimestamps);
+        _series = new Lazy<Task<Series<(DateTime, float), string>>>(LoadSeries);
     }
-
-    public ArchiveRadarDataProvider(IConfiguration configuration, ILogger<ArchiveRadarDataProvider> logger) {
-        var configPath = configuration["RadarData:Path"];
+    private static string? GetArchivePath(string? configPath) {
         string? archivePath = null;
-
         if (!string.IsNullOrEmpty(configPath)) {
             if (Path.IsPathRooted(configPath)) {
                 archivePath = configPath;
             } else {
-                // Try multiple possible base directories
-                var possibleBases = new[] {
-                    Directory.GetCurrentDirectory(),
-                    AppDomain.CurrentDomain.BaseDirectory,
-                    Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location) ?? "",
-                    "/home/leaver/RadarMoves" // Fallback for known location
-                };
-
-                foreach (var baseDir in possibleBases) {
-                    if (!string.IsNullOrEmpty(baseDir)) {
-                        var testPath = Path.Combine(baseDir, configPath);
-                        if (Directory.Exists(testPath)) {
-                            archivePath = testPath;
-                            break;
-                        }
-                    }
-                }
-
-                // If none found, use current directory
-                if (archivePath == null) {
-                    archivePath = Path.Combine(Directory.GetCurrentDirectory(), configPath);
-                }
-            }
-        } else {
-            // Default path - try multiple locations
-            var possiblePaths = new[] {
-                Path.Combine(Directory.GetCurrentDirectory(), "data", "ewr", "archive"),
-                Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "data", "ewr", "archive"),
-                "/home/leaver/RadarMoves/data/ewr/archive"
-            };
-
-            foreach (var path in possiblePaths) {
-                if (Directory.Exists(path)) {
-                    archivePath = path;
-                    break;
-                }
-            }
-
-            if (archivePath == null) {
-                archivePath = Path.Combine(Directory.GetCurrentDirectory(), "data", "ewr", "archive");
+                archivePath ??= Path.Combine(Directory.GetCurrentDirectory(), "..", configPath);
             }
         }
 
-        _archivePath = archivePath;
+        return archivePath;
+    }
+    public ArchiveRadarDataProvider(IConfiguration configuration, ILogger<ArchiveRadarDataProvider> logger) {
+        _archivePath = GetArchivePath(configuration["RadarData:Path"]) ?? throw new ArgumentNullException(nameof(configuration));
         _logger = logger;
-        _timestamps = new Lazy<Task<List<DateTime>>>(LoadTimestampsAsync);
-
-        _logger.LogInformation("Initializing ArchiveRadarDataProvider with path: {ArchivePath}", _archivePath);
-        _logger.LogInformation("Directory exists: {Exists}, Current directory: {CurrentDir}",
-            Directory.Exists(_archivePath), Directory.GetCurrentDirectory());
-
-        if (!Directory.Exists(_archivePath)) {
-            _logger.LogError("Archive directory does not exist: {ArchivePath}", _archivePath);
-        }
+        _timestamps = new Lazy<Task<List<DateTime>>>(LoadTimestamps);
+        _series = new Lazy<Task<Series<(DateTime, float), string>>>(LoadSeries);
     }
 
     public IEnumerable<Channel> GetAvailableChannels() => Enum.GetValues<Channel>();
 
-    public async Task<IEnumerable<DateTime>> GetTimestampsAsync() {
-        return await _timestamps.Value;
-    }
+    public async Task<IEnumerable<DateTime>> GetTimestamps() => (await _series.Value).Keys.Select(k => k.Item1);
 
-    public async Task<(DateTime Start, DateTime End)?> GetTimeRangeAsync() {
-        var timestamps = await GetTimestampsAsync();
+
+
+
+    public async Task<(DateTime Start, DateTime End)?> GetTimeRange() {
+        var timestamps = await GetTimestamps();
         var timestampList = timestamps.ToList();
         if (timestampList.Count == 0) return null;
         return (timestampList.Min(), timestampList.Max());
     }
 
-    public async Task<IReadOnlyList<float>?> GetElevationAnglesAsync(DateTime timestamp) {
-        var files = await GetFilesForTimestampAsync(timestamp);
+    public async Task<IReadOnlyList<float>?> GetElevationAngles(DateTime timestamp) {
+        var files = await GetFilesForTimestamp(timestamp);
         if (files == null || files.Count == 0) {
             _logger.LogWarning("No files found for timestamp {Timestamp}", timestamp);
             return null;
         }
 
-        _logger.LogInformation("Getting elevations for timestamp {Timestamp}, found {Count} files", timestamp, files.Count);
+
 
         var elevations = new List<float>();
         foreach (var filePath in files) {
@@ -127,15 +87,14 @@ public class ArchiveRadarDataProvider : IRadarDataProvider {
         return uniqueElevations.AsReadOnly();
     }
 
-    public async Task<ScanMetadata?> GetScanMetadataAsync(DateTime timestamp, float elevationAngle) {
-        var files = await GetFilesForTimestampAsync(timestamp);
+    public async Task<ScanMetadata?> GetScanMetadata(DateTime timestamp, float elevationAngle) {
+        var files = await GetFilesForTimestamp(timestamp);
         if (files == null || files.Count == 0) {
             _logger.LogWarning("No files found for timestamp {Timestamp}", timestamp);
             return null;
         }
 
-        _logger.LogInformation("Looking for scan: timestamp={Timestamp}, elevation={Elevation}, found {Count} files",
-            timestamp, elevationAngle, files.Count);
+
 
         foreach (var filePath in files) {
             try {
@@ -179,8 +138,8 @@ public class ArchiveRadarDataProvider : IRadarDataProvider {
         return null;
     }
 
-    public async Task<float?> GetValueAsync(Channel channel, DateTime timestamp, float elevationAngle, int ray, int bin) {
-        var files = await GetFilesForTimestampAsync(timestamp);
+    public async Task<float?> GetValue(Channel channel, DateTime timestamp, float elevationAngle, int ray, int bin) {
+        var files = await GetFilesForTimestamp(timestamp);
         if (files == null || files.Count == 0) {
             _logger.LogWarning("No files found for timestamp {Timestamp}", timestamp);
             return null;
@@ -212,8 +171,8 @@ public class ArchiveRadarDataProvider : IRadarDataProvider {
         return null;
     }
 
-    public async Task<float?> GetValueByGeoAsync(Channel channel, DateTime timestamp, float elevationAngle, float latitude, float longitude) {
-        var files = await GetFilesForTimestampAsync(timestamp);
+    public async Task<float?> GetValueByGeo(Channel channel, DateTime timestamp, float elevationAngle, float latitude, float longitude) {
+        var files = await GetFilesForTimestamp(timestamp);
         if (files == null || files.Count == 0) return null;
 
         foreach (var filePath in files) {
@@ -249,8 +208,8 @@ public class ArchiveRadarDataProvider : IRadarDataProvider {
         return null;
     }
 
-    public async Task<float[,]?> GetDataAsync(Channel channel, DateTime timestamp, float elevationAngle) {
-        var files = await GetFilesForTimestampAsync(timestamp);
+    public async Task<float[,]?> GetRawData(Channel channel, DateTime timestamp, float elevationAngle) {
+        var files = await GetFilesForTimestamp(timestamp);
         if (files == null || files.Count == 0) return null;
 
         foreach (var filePath in files) {
@@ -258,7 +217,7 @@ public class ArchiveRadarDataProvider : IRadarDataProvider {
                 using var scan = new EWRPolarScan(filePath);
                 var elevationDiff = Math.Abs(scan.ElevationAngle - elevationAngle);
                 if (elevationDiff < 0.5f) { // Increased tolerance
-                    return scan[channel];
+                    return scan.GetRawData(channel);
                 }
             } catch (Exception ex) {
                 _logger.LogWarning(ex, "Failed to read data from {FilePath}", filePath);
@@ -267,9 +226,26 @@ public class ArchiveRadarDataProvider : IRadarDataProvider {
 
         return null;
     }
+    public async Task<float[,]?> GetFilteredData(Channel channel, DateTime timestamp, float elevationAngle) {
+        var files = await GetFilesForTimestamp(timestamp);
+        if (files == null || files.Count == 0) return null;
 
-    public async Task<byte[]?> GetImageAsync(Channel channel, DateTime timestamp, float elevationAngle, int width = 1500, int height = 1500) {
-        var files = await GetFilesForTimestampAsync(timestamp);
+        foreach (var filePath in files) {
+            try {
+                using var scan = new EWRPolarScan(filePath);
+                var elevationDiff = Math.Abs(scan.ElevationAngle - elevationAngle);
+                if (elevationDiff < 0.5f) {
+                    return scan.GetFilteredData(channel);
+                }
+            } catch (Exception ex) {
+                _logger.LogWarning(ex, "Failed to read filtered data from {FilePath}", filePath);
+            }
+        }
+        return null;
+    }
+
+    public async Task<byte[]?> GetImage(Channel channel, DateTime timestamp, float elevationAngle, int width = 1500, int height = 1500) {
+        var files = await GetFilesForTimestamp(timestamp);
         if (files == null || files.Count == 0) {
             _logger.LogWarning("No files found for timestamp {Timestamp}", timestamp);
             return null;
@@ -368,13 +344,68 @@ public class ArchiveRadarDataProvider : IRadarDataProvider {
         return null;
     }
 
-    private async Task<List<DateTime>> LoadTimestampsAsync() {
+    public async Task<MultiIndex<(DateTime, float)>> GetMultiIndex() {
+        var series = await _series.Value;
+        return series.Index;
+    }
+
+    public async Task<Series<(DateTime, float), string>> GetSeries() {
+        return await _series.Value;
+    }
+
+    public async Task<DateTime?> GetPVOLStartTime(DateTime timestamp) {
+        // Find the PVOL start time (lowest elevation angle for this timestamp)
+        // Within 1 second tolerance
+        var matchingKey = _filesByTimestamp.Keys.FirstOrDefault(k => Math.Abs((k - timestamp).TotalSeconds) < 1.0);
+        if (matchingKey != default) {
+            return matchingKey;
+        }
+        return null;
+    }
+
+    private async Task<Series<(DateTime, float), string>> LoadSeries() {
+        return await Task.Run(() => {
+            // Ensure timestamps are loaded first
+            _timestamps.Value.Wait();
+
+            var indexList = new List<(DateTime, float)>();
+            var filePaths = new List<string>();
+
+            foreach (var (timestamp, files) in _filesByTimestamp) {
+                foreach (var filePath in files) {
+                    try {
+                        using var scan = new EWRPolarScan(filePath);
+                        var item = (timestamp, scan.ElevationAngle);
+                        indexList.Add(item);
+                        filePaths.Add(filePath);
+                        _indexToFile[item] = filePath;
+                    } catch (Exception ex) {
+                        _logger.LogError(ex, "Failed to read elevation from {FilePath} for series", filePath);
+                    }
+                }
+            }
+
+            // Sort by timestamp then elevation
+            var sortedPairs = indexList.Zip(filePaths)
+                .OrderBy(p => p.First.Item1)  // Sort by DateTime (timestamp)
+                .ThenBy(p => p.First.Item2)   // Then by float (elevation)
+                .ToList();
+
+            var sortedIndex = sortedPairs.Select(p => p.First).ToList();
+            var sortedPaths = sortedPairs.Select(p => p.Second).ToList();
+
+            _logger.LogInformation("Loaded series with {Count} entries", sortedIndex.Count);
+            return new Series<(DateTime, float), string>(sortedPaths, sortedIndex);
+        });
+    }
+
+    private async Task<List<DateTime>> LoadTimestamps() {
         return await Task.Run(() => {
             if (!Directory.Exists(_archivePath)) {
                 _logger.LogError("Archive directory not found: {ArchivePath}", _archivePath);
                 _logger.LogError("Current working directory: {CurrentDir}", Directory.GetCurrentDirectory());
                 _logger.LogError("Trying absolute path: {AbsolutePath}", Path.GetFullPath(_archivePath));
-                return new List<DateTime>();
+                return [];
             }
 
             var h5Files = Directory.GetFiles(_archivePath, "*.h5", SearchOption.TopDirectoryOnly);
@@ -382,7 +413,7 @@ public class ArchiveRadarDataProvider : IRadarDataProvider {
 
             if (h5Files.Length == 0) {
                 _logger.LogWarning("No H5 files found in directory: {ArchivePath}", _archivePath);
-                return new List<DateTime>();
+                return [];
             }
 
             var timestamps = new HashSet<DateTime>();
@@ -410,7 +441,7 @@ public class ArchiveRadarDataProvider : IRadarDataProvider {
         });
     }
 
-    private async Task<List<string>?> GetFilesForTimestampAsync(DateTime timestamp) {
+    private async Task<List<string>?> GetFilesForTimestamp(DateTime timestamp) {
         // Ensure timestamps are loaded
         await _timestamps.Value;
 
@@ -428,36 +459,19 @@ public class ArchiveRadarDataProvider : IRadarDataProvider {
     }
 
     private static DateTime? ExtractTimestampFromFile(string filePath) {
-        var fileName = Path.GetFileNameWithoutExtension(filePath);
-
-        // Pattern: EWR followed by 12 digits (YYMMDDHHMMSS)
-        var match = Regex.Match(fileName, @"EWR(\d{12})");
-        if (match.Success) {
-            var timestampStr = match.Groups[1].Value;
-            if (timestampStr.Length == 12) {
-                var year = int.Parse(timestampStr.Substring(0, 2));
-                var month = int.Parse(timestampStr.Substring(2, 2));
-                var day = int.Parse(timestampStr.Substring(4, 2));
-                var hour = int.Parse(timestampStr.Substring(6, 2));
-                var minute = int.Parse(timestampStr.Substring(8, 2));
-                var second = int.Parse(timestampStr.Substring(10, 2));
-
-                // Handle year 00-99 as 2000-2099
-                var fullYear = year < 50 ? 2000 + year : 1900 + year;
-
-                try {
-                    return new DateTime(fullYear, month, day, hour, minute, second);
-                } catch {
-                    return null;
-                }
-            }
-        }
-
-        // Fallback: try to read from file metadata
         try {
-            using var scan = new EWRPolarScan(filePath);
-            return scan.Datetime;
-        } catch {
+            // Use PureHDF to read the top-level "what" group and extract date/time attributes
+            // This gives us the PVOL start time, not the file creation time
+            using var file = H5File.OpenRead(filePath);
+            var what = file.Group("what");
+
+            string date = what.GetAttribute<string>("date");
+            string time = what.GetAttribute<string>("time");
+
+            // Parse the date and time attributes (format: yyyyMMddHHmmss)
+            return DateTime.ParseExact($"{date}{time}", "yyyyMMddHHmmss", CultureInfo.InvariantCulture);
+        } catch (Exception) {
+            // If we can't read from H5 file, return null
             return null;
         }
     }

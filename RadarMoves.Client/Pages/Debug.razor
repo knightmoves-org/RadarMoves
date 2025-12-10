@@ -1,0 +1,553 @@
+@page "/debug"
+@rendermode InteractiveWebAssembly
+@using Microsoft.AspNetCore.SignalR.Client
+@inject NavigationManager Navigation
+@implements IAsyncDisposable
+@using System.Text.Json
+
+<PageTitle>Debug - RadarDataHub</PageTitle>
+
+<div class="debug-container">
+    <h1>RadarDataHub SignalR Debug</h1>
+
+    <div class="connection-status">
+        <strong>Connection Status:</strong>
+        <span class="status-badge @(_connectionState == "Connected" ? "connected" : "disconnected")">
+            @_connectionState
+        </span>
+        @if (!string.IsNullOrEmpty(_connectionError))
+        {
+            <span class="error-text">Error: @_connectionError</span>
+        }
+    </div>
+
+    <div class="controls">
+        <button class="btn btn-primary" @onclick="SubscribeToUpdates"
+            disabled="@(_hubConnection?.State != HubConnectionState.Connected)">
+            Subscribe to PVOL Updates
+        </button>
+        <button class="btn btn-secondary" @onclick="GetAvailablePVOLs"
+            disabled="@(_hubConnection?.State != HubConnectionState.Connected)">
+            Get Available PVOLs
+        </button>
+        <button class="btn btn-danger" @onclick="ClearLog">Clear Log</button>
+        <button class="btn btn-warning" @onclick="ClearMultiIndex">Clear MultiIndex</button>
+    </div>
+
+    <div class="multiindex-display">
+        <h2>Client-Side MultiIndex (Built from Processed Images)</h2>
+        <div class="multiindex-stats">
+            <strong>Total Entries:</strong> @_clientMultiIndex.Count |
+            <strong>Unique Timestamps:</strong> @_clientMultiIndex.GroupBy(e => e.Timestamp).Count() |
+            <strong>Last Updated:</strong> @(_lastMultiIndexUpdate?.ToString("HH:mm:ss.fff") ?? "Never")
+        </div>
+        @if (_clientMultiIndex.Count == 0)
+        {
+            <p class="no-data">Waiting for ImageAvailable events...</p>
+        }
+        else
+        {
+            <div class="multiindex-container">
+                <pre class="multiindex-json">@_multiIndexJson</pre>
+            </div>
+        }
+    </div>
+
+    <div class="event-log">
+        <h2>Event Log</h2>
+        <div class="log-container">
+            @foreach (var logEntry in _eventLog)
+            {
+                <div class="log-entry @logEntry.Type">
+                    <div class="log-timestamp">@logEntry.Timestamp.ToString("HH:mm:ss.fff")</div>
+                    <div class="log-event">@logEntry.Event</div>
+                    <pre class="log-data">@logEntry.Data</pre>
+                </div>
+            }
+        </div>
+    </div>
+</div>
+
+@code {
+    private HubConnection? _hubConnection;
+    private string _connectionState = "Disconnected";
+    private string _connectionError = string.Empty;
+    private List<LogEntry> _eventLog = new();
+    private string _multiIndexJson = string.Empty;
+    private readonly JsonSerializerOptions _jsonOptions = new() { WriteIndented = true };
+
+    // Client-side MultiIndex built from ImageAvailable events
+    private readonly List<MultiIndexEntry> _clientMultiIndex = new();
+    private DateTime? _lastMultiIndexUpdate;
+
+    private class MultiIndexEntry
+    {
+        public DateTime Timestamp { get; set; }
+        public float Elevation { get; set; }
+        public string Channel { get; set; } = string.Empty;
+        public int ImageSizeBytes { get; set; }
+        public DateTime ProcessedAt { get; set; }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        _hubConnection = new HubConnectionBuilder()
+        .WithUrl(Navigation.ToAbsoluteUri("/radarDataHub"))
+        .Build();
+
+        // Register all event handlers
+        RegisterEventHandlers();
+
+        _hubConnection.Closed += async (error) =>
+        {
+            _connectionState = "Disconnected";
+            if (error != null)
+            {
+                _connectionError = error.Message;
+            }
+            AddLogEntry("Connection", "Disconnected", error?.Message ?? "Connection closed");
+            await InvokeAsync(StateHasChanged);
+            await Task.Delay(2000);
+            await StartConnection();
+        };
+
+        _hubConnection.Reconnecting += async (error) =>
+        {
+            _connectionState = "Reconnecting";
+            _connectionError = error?.Message ?? string.Empty;
+            AddLogEntry("Connection", "Reconnecting", error?.Message ?? "Reconnecting...");
+            await InvokeAsync(StateHasChanged);
+        };
+
+        _hubConnection.Reconnected += async (connectionId) =>
+        {
+            _connectionState = "Connected";
+            _connectionError = string.Empty;
+            AddLogEntry("Connection", "Reconnected", $"Connection ID: {connectionId}");
+            await InvokeAsync(StateHasChanged);
+        };
+
+        await StartConnection();
+    }
+
+    private void RegisterEventHandlers()
+    {
+        if (_hubConnection == null) return;
+
+        // PVOLProcessed event
+        _hubConnection.On<DateTime, float[]>("PVOLProcessed", async (timestamp, elevations) =>
+        {
+            var data = new
+            {
+                timestamp = timestamp.ToString("yyyy-MM-dd HH:mm:ss"),
+                elevations = elevations
+            };
+            AddLogEntry("PVOLProcessed", "PVOL Processing Complete", JsonSerializer.Serialize(data, _jsonOptions));
+            await InvokeAsync(StateHasChanged);
+        });
+
+        // ImageAvailable event
+        _hubConnection.On<DateTime, float, string, byte[]>("ImageAvailable", async (timestamp, elevation, channel, imageData) =>
+        {
+            var data = new
+            {
+                timestamp = timestamp.ToString("yyyy-MM-dd HH:mm:ss"),
+                elevation = elevation,
+                channel = channel,
+                imageSizeBytes = imageData.Length
+            };
+            AddLogEntry("ImageAvailable", "Image Cached", JsonSerializer.Serialize(data, _jsonOptions));
+
+            // Add to client-side MultiIndex
+            AddToMultiIndex(timestamp, elevation, channel, imageData.Length);
+
+            // Update the JSON display
+            UpdateMultiIndexJson();
+
+            await InvokeAsync(StateHasChanged);
+        });
+
+        // Error event (if sent from server)
+        _hubConnection.On<string>("Error", (errorMessage) =>
+        {
+            AddLogEntry("Error", "Server Error", errorMessage);
+            InvokeAsync(StateHasChanged);
+        });
+    }
+
+    private async Task StartConnection()
+    {
+        if (_hubConnection?.State == HubConnectionState.Disconnected)
+        {
+            try
+            {
+                await _hubConnection.StartAsync();
+                _connectionState = "Connected";
+                _connectionError = string.Empty;
+                AddLogEntry("Connection", "Connected", $"Connection ID: {_hubConnection.ConnectionId}");
+                await InvokeAsync(StateHasChanged);
+            }
+            catch (Exception ex)
+            {
+                _connectionState = "Failed";
+                _connectionError = ex.Message;
+                AddLogEntry("Connection", "Connection Failed", ex.Message);
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+    }
+
+    private async Task SubscribeToUpdates()
+    {
+        if (_hubConnection?.State == HubConnectionState.Connected)
+        {
+            try
+            {
+                await _hubConnection.SendAsync("SubscribeToPVOLUpdates");
+                AddLogEntry("Action", "SubscribeToPVOLUpdates", "Subscribed to PVOL update notifications");
+                await InvokeAsync(StateHasChanged);
+            }
+            catch (Exception ex)
+            {
+                AddLogEntry("Error", "Subscribe Failed", ex.Message);
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+    }
+
+    private async Task GetAvailablePVOLs()
+    {
+        if (_hubConnection?.State == HubConnectionState.Connected)
+        {
+            try
+            {
+                var pvols = await _hubConnection.InvokeAsync<IEnumerable<DateTime>>("GetAvailablePVOLs");
+                var data = new
+                {
+                    count = pvols.Count(),
+                    timestamps = pvols.Select(t => t.ToString("yyyy-MM-dd HH:mm:ss")).ToArray()
+                };
+                AddLogEntry("Response", "GetAvailablePVOLs", JsonSerializer.Serialize(data, _jsonOptions));
+                await InvokeAsync(StateHasChanged);
+            }
+            catch (Exception ex)
+            {
+                AddLogEntry("Error", "GetAvailablePVOLs Failed", ex.Message);
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+    }
+
+    private void AddToMultiIndex(DateTime timestamp, float elevation, string channel, int imageSizeBytes)
+    {
+        // Check if this entry already exists (same timestamp, elevation, channel)
+        var existing = _clientMultiIndex.FirstOrDefault(e =>
+        e.Timestamp == timestamp &&
+        Math.Abs(e.Elevation - elevation) < 0.001f &&
+        e.Channel == channel);
+
+        if (existing != null)
+        {
+            // Update existing entry
+            existing.ImageSizeBytes = imageSizeBytes;
+            existing.ProcessedAt = DateTime.Now;
+        }
+        else
+        {
+            // Add new entry
+            _clientMultiIndex.Add(new MultiIndexEntry
+            {
+                Timestamp = timestamp,
+                Elevation = elevation,
+                Channel = channel,
+                ImageSizeBytes = imageSizeBytes,
+                ProcessedAt = DateTime.Now
+            });
+        }
+
+        _lastMultiIndexUpdate = DateTime.Now;
+    }
+
+    private void UpdateMultiIndexJson()
+    {
+        // Sort by timestamp then elevation
+        var sorted = _clientMultiIndex
+        .OrderBy(e => e.Timestamp)
+        .ThenBy(e => e.Elevation)
+        .ToList();
+
+        // Build MultiIndex structure similar to server-side
+        var multiIndexData = new
+        {
+            count = sorted.Count,
+            entries = sorted.Select(e => new
+            {
+                timestamp = e.Timestamp.ToString("yyyy-MM-dd HH:mm:ss"),
+                elevation = e.Elevation,
+                channel = e.Channel,
+                imageSizeBytes = e.ImageSizeBytes,
+                processedAt = e.ProcessedAt.ToString("HH:mm:ss.fff")
+            }).ToList(),
+            groupedByTime = sorted
+        .GroupBy(e => e.Timestamp)
+        .Select(g => new
+        {
+            timestamp = g.Key.ToString("yyyy-MM-dd HH:mm:ss"),
+            elevations = g.Select(e => e.Elevation).Distinct().OrderBy(e => e).ToArray(),
+            channels = g.Select(e => e.Channel).Distinct().ToArray(),
+            count = g.Count()
+        })
+        .OrderBy(g => g.timestamp)
+        .ToList()
+        };
+
+        _multiIndexJson = JsonSerializer.Serialize(multiIndexData, _jsonOptions);
+    }
+
+    private void ClearMultiIndex()
+    {
+        _clientMultiIndex.Clear();
+        _multiIndexJson = string.Empty;
+        _lastMultiIndexUpdate = null;
+        StateHasChanged();
+    }
+
+    private void ClearLog()
+    {
+        _eventLog.Clear();
+        StateHasChanged();
+    }
+
+    private void AddLogEntry(string type, string eventName, string data)
+    {
+        _eventLog.Insert(0, new LogEntry
+        {
+            Timestamp = DateTime.Now,
+            Type = type.ToLower(),
+            Event = eventName,
+            Data = data
+        });
+
+        // Keep only last 100 entries
+        if (_eventLog.Count > 100)
+        {
+            _eventLog.RemoveAt(_eventLog.Count - 1);
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_hubConnection is not null)
+        {
+            await _hubConnection.DisposeAsync();
+        }
+    }
+
+    private class LogEntry
+    {
+        public DateTime Timestamp { get; set; }
+        public string Type { get; set; } = string.Empty;
+        public string Event { get; set; } = string.Empty;
+        public string Data { get; set; } = string.Empty;
+    }
+}
+
+<style>
+    .debug-container {
+        padding: 20px;
+        max-width: 1400px;
+        margin: 0 auto;
+    }
+
+    .connection-status {
+        margin: 20px 0;
+        padding: 15px;
+        background-color: #f8f9fa;
+        border-radius: 5px;
+    }
+
+    .status-badge {
+        padding: 5px 10px;
+        border-radius: 3px;
+        font-weight: bold;
+        margin-left: 10px;
+    }
+
+    .status-badge.connected {
+        background-color: #28a745;
+        color: white;
+    }
+
+    .status-badge.disconnected {
+        background-color: #dc3545;
+        color: white;
+    }
+
+    .error-text {
+        color: #dc3545;
+        margin-left: 10px;
+    }
+
+    .controls {
+        margin: 20px 0;
+        display: flex;
+        gap: 10px;
+    }
+
+    .btn {
+        padding: 8px 16px;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 14px;
+    }
+
+    .btn-primary {
+        background-color: #007bff;
+        color: white;
+    }
+
+    .btn-primary:hover:not(:disabled) {
+        background-color: #0056b3;
+    }
+
+    .btn-secondary {
+        background-color: #6c757d;
+        color: white;
+    }
+
+    .btn-secondary:hover:not(:disabled) {
+        background-color: #545b62;
+    }
+
+    .btn-danger {
+        background-color: #dc3545;
+        color: white;
+    }
+
+    .btn-danger:hover:not(:disabled) {
+        background-color: #c82333;
+    }
+
+    .btn-warning {
+        background-color: #ffc107;
+        color: #212529;
+    }
+
+    .btn-warning:hover:not(:disabled) {
+        background-color: #e0a800;
+    }
+
+    .btn:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+    }
+
+    .multiindex-display {
+        margin-top: 30px;
+    }
+
+    .multiindex-stats {
+        margin-bottom: 10px;
+        padding: 10px;
+        background-color: #e9ecef;
+        border-radius: 5px;
+        font-size: 14px;
+    }
+
+    .multiindex-container {
+        border: 1px solid #ddd;
+        border-radius: 5px;
+        padding: 15px;
+        background-color: #f8f9fa;
+        max-height: 400px;
+        overflow-y: auto;
+    }
+
+    .multiindex-json {
+        font-size: 12px;
+        background-color: white;
+        padding: 15px;
+        border-radius: 3px;
+        overflow-x: auto;
+        margin: 0;
+        white-space: pre-wrap;
+        word-wrap: break-word;
+        border: 1px solid #dee2e6;
+    }
+
+    .no-data {
+        color: #6c757d;
+        font-style: italic;
+        padding: 20px;
+        text-align: center;
+    }
+
+    .event-log {
+        margin-top: 30px;
+    }
+
+    .log-container {
+        max-height: 600px;
+        overflow-y: auto;
+        border: 1px solid #ddd;
+        border-radius: 5px;
+        padding: 10px;
+        background-color: #f8f9fa;
+    }
+
+    .log-entry {
+        margin-bottom: 15px;
+        padding: 10px;
+        border-left: 4px solid #ddd;
+        background-color: white;
+        border-radius: 3px;
+    }
+
+    .log-entry.connection {
+        border-left-color: #007bff;
+    }
+
+    .log-entry.pvolprocessed {
+        border-left-color: #28a745;
+    }
+
+    .log-entry.imageavailable {
+        border-left-color: #17a2b8;
+    }
+
+    .log-entry.error {
+        border-left-color: #dc3545;
+    }
+
+    .log-entry.action {
+        border-left-color: #ffc107;
+    }
+
+    .log-entry.response {
+        border-left-color: #6f42c1;
+    }
+
+    .log-timestamp {
+        font-size: 11px;
+        color: #6c757d;
+        margin-bottom: 5px;
+    }
+
+    .log-event {
+        font-weight: bold;
+        margin-bottom: 5px;
+        color: #333;
+    }
+
+    .log-data {
+        font-size: 12px;
+        background-color: #f8f9fa;
+        padding: 10px;
+        border-radius: 3px;
+        overflow-x: auto;
+        margin: 0;
+        white-space: pre-wrap;
+        word-wrap: break-word;
+    }
+</style>

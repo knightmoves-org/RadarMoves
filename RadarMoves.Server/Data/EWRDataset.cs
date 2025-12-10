@@ -133,7 +133,7 @@ public sealed class EWRDataset : IDisposable {
         var scan = volume.GetScanByElevation(elevationAngle);
         if (scan == null) return null;
 
-        return scan[channel];
+        return scan.GetRawData(channel);
     }
 
     /// <summary>

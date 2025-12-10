@@ -7,7 +7,7 @@ namespace RadarMoves.Test;
 public class DatasetTests {
     public static readonly string ROOT = Path.Combine(Directory.GetCurrentDirectory(), "..", "..", "..", "..");
     public static readonly string DATA_ROOT = Path.Combine(ROOT, "data");
-    public static readonly string EWR_ROOT = Path.Combine(DATA_ROOT, "ewr");
+    public static readonly string EWR_ROOT = Path.Combine(DATA_ROOT, "ewr", "samples");
     public static readonly string DOCUMENTS = Path.Combine(ROOT, "Documents");
     public static readonly string IMAGES = Path.Combine(DOCUMENTS, "Images");
 

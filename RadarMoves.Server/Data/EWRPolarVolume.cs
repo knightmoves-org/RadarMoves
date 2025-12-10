@@ -58,8 +58,8 @@ public sealed class EWRPolarVolume : IDisposable {
     /// Create a PolarVolume from multiple file paths (one per elevation angle)
     /// </summary>
     public EWRPolarVolume(IEnumerable<string> filePaths) {
-        _scans = new List<EWRPolarScan>();
-        _elevationIndex = new Dictionary<float, EWRPolarScan>();
+        _scans = [];
+        _elevationIndex = [];
 
         foreach (var filePath in filePaths) {
             var scan = new EWRPolarScan(filePath);
@@ -91,7 +91,7 @@ public sealed class EWRPolarVolume : IDisposable {
     /// Create a PolarVolume from multiple EWRPolarScan objects
     /// </summary>
     public EWRPolarVolume(IEnumerable<EWRPolarScan> scans) {
-        _scans = scans.ToList();
+        _scans = [.. scans];
         _elevationIndex = new Dictionary<float, EWRPolarScan>();
 
         foreach (var scan in _scans) {

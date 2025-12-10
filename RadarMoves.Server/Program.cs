@@ -1,12 +1,26 @@
 using Microsoft.AspNetCore.ResponseCompression;
+using Microsoft.AspNetCore.Components.Server.ProtectedBrowserStorage;
 using StackExchange.Redis;
 
 using RadarMoves.Server.Components;
 using RadarMoves.Server.Services;
 using RadarMoves.Server.Hubs;
 using RadarMoves.Server.Data;
+using RadarMoves.Server.Data.Caching;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// ===========================================================================================
+// COMMAND-LINE ARGUMENT PROCESSING
+// ===========================================================================================
+
+// Check for --demo flag and override data path if present
+// Usage: dotnet run --project RadarMoves.Server -- --demo
+// Or when running the compiled executable: ./RadarMoves.Server --demo
+if (args.Contains("--demo")) {
+    builder.Configuration["RadarData:Path"] = "data/ewr/archive";
+    Console.WriteLine("Demo mode enabled: Using data/ewr/archive");
+}
 
 // ===========================================================================================
 // RAZOR COMPONENTS (BLAZOR) CONFIGURATION
@@ -17,7 +31,12 @@ var builder = WebApplication.CreateBuilder(args);
 // - AddInteractiveWebAssemblyComponents: Enables Blazor WebAssembly mode (client-side rendering in browser)
 // This hybrid setup allows mixing both render modes in the same application
 
-builder.Services.AddRazorComponents().AddInteractiveWebAssemblyComponents();
+builder.Services.AddRazorComponents()
+    .AddInteractiveWebAssemblyComponents()
+    .AddInteractiveServerComponents(); // Needed for ProtectedBrowserStorage
+
+// Register ProtectedSessionStorage for secure browser storage
+builder.Services.AddScoped<Microsoft.AspNetCore.Components.Server.ProtectedBrowserStorage.ProtectedSessionStorage>();
 
 // ===========================================================================================
 // SIGNALR AND RESPONSE COMPRESSION CONFIGURATION
@@ -45,6 +64,8 @@ builder.Services.AddSingleton<IRadarDataProvider>(sp => {
 });
 
 builder.Services.AddSingleton<RadarDatasetService>();
+builder.Services.AddScoped<RadarMoves.Server.Services.ImageCacheService>();
+builder.Services.AddScoped<RadarMoves.Client.Services.ImageCacheService>();
 builder.Services.AddControllers();
 
 // Register HttpClient for Blazor WebAssembly components during server-side rendering
@@ -79,6 +100,33 @@ builder.Services.AddSingleton<IConnectionMultiplexer>(sp => {
 });
 
 // ===========================================================================================
+// RADAR DATA CACHING
+// ===========================================================================================
+
+// Register radar data cache based on configuration
+builder.Services.AddSingleton<IRadarDataCache>(sp => {
+    var configuration = sp.GetRequiredService<IConfiguration>();
+    var cacheType = configuration["RadarData:CacheType"] ?? "Dictionary";
+    var logger = sp.GetRequiredService<ILogger<IRadarDataCache>>();
+
+    if (cacheType.Equals("Redis", StringComparison.OrdinalIgnoreCase)) {
+        var multiplexer = sp.GetRequiredService<IConnectionMultiplexer>();
+        var redisLogger = sp.GetRequiredService<ILogger<RedisRadarDataCache>>();
+        return new RedisRadarDataCache(multiplexer, redisLogger);
+    } else {
+        return new DictionaryRadarDataCache();
+    }
+});
+
+// ===========================================================================================
+// BACKGROUND PROCESSING SERVICE
+// ===========================================================================================
+
+// Register PVOL processing service - needs to be both a hosted service and accessible for injection
+builder.Services.AddSingleton<PVOLProcessingService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<PVOLProcessingService>());
+
+// ===========================================================================================
 // BUILD THE APPLICATION
 // ===========================================================================================
 
@@ -108,12 +156,15 @@ app.MapStaticAssets();
 // Map the StateHub to the application pipeline (before Razor components)
 app.MapHub<StateHub>("/stateHub");
 
+// Map the RadarDataHub for real-time radar data streaming
+app.MapHub<RadarDataHub>("/radarDataHub");
+
 app.MapRazorComponents<App>()
     .AddInteractiveWebAssemblyRenderMode()
     .AddAdditionalAssemblies(typeof(RadarMoves.Client._Imports).Assembly);
 
 // Map the StateHub to the application pipeline
-app.MapHub<StateHub>("/state");
+// app.MapHub<StateHub>("/state");
 
 // Start the application
 app.Run();

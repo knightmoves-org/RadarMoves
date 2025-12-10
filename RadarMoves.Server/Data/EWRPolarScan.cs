@@ -107,14 +107,18 @@ public sealed class EWRPolarScan : IDisposable, IRadarDataset<float> {
     public IEnumerable<Channel> Keys => Enum.GetValues<Channel>();
     public float[][,] Raw => _raw;
     public IEnumerable<float[,]> Values => _raw;
-    public float[,] GetFilteredData(Channel c) {
+    public float[,] GetFilteredData(int idx) {
         var filter = new SpeckleRemovalFilter(threshold: 1.0f, minArea: 32);
-        var grid = _raw[(int)c].AsSpan();
+        var grid = _raw[idx].AsSpan();
         filter.Apply(grid);
         return grid.AsArray();
     }
+    public float[,] GetFilteredData(Channel c) => GetFilteredData((int)c);
     public float[,] this[Channel c] => GetFilteredData(c);
-    public float[,] this[int idx] => this[(Channel)idx];
+    public float[,] this[int idx] => GetFilteredData(idx);
+    public float[,] GetRawData(int idx) => _raw[idx];
+    public float[,] GetRawData(Channel c) => GetRawData((int)c);
+
     public void Dispose() {
         _file?.Dispose();
         GC.SuppressFinalize(this);
@@ -153,23 +157,23 @@ public sealed class EWRPolarScan : IDisposable, IRadarDataset<float> {
 
         _raw = new float[keys.Length][,];
 
-        // Try to read dimensions from the actual dataset if attributes are 0
-        bool dimensionsFromData = false;
-        if (NRays == 0 || NBins == 0) {
-            // Try to get dimensions from the first data dataset
-            try {
-                var firstDataGroup = root.Group(keys[0]);
-                var firstDataset = firstDataGroup.Dataset("data");
-                var dims = firstDataset.Space.Dimensions;
-                if (dims.Length >= 2) {
-                    NRays = (int)dims[0];
-                    NBins = (int)dims[1];
-                    dimensionsFromData = true;
-                }
-            } catch {
-                // If we can't read from dataset, keep the attribute values (which are 0)
-            }
-        }
+        // // Try to read dimensions from the actual dataset if attributes are 0
+        // bool dimensionsFromData = false;
+        // if (NRays == 0 || NBins == 0) {
+        //     // Try to get dimensions from the first data dataset
+        //     try {
+        //         var firstDataGroup = root.Group(keys[0]);
+        //         var firstDataset = firstDataGroup.Dataset("data");
+        //         var dims = firstDataset.Space.Dimensions;
+        //         if (dims.Length >= 2) {
+        //             NRays = (int)dims[0];
+        //             NBins = (int)dims[1];
+        //             dimensionsFromData = true;
+        //         }
+        //     } catch {
+        //         // If we can't read from dataset, keep the attribute values (which are 0)
+        //     }
+        // }
 
         // calculate azimuth from start and stop azimuth angles
         if (NRays > 0 && startAz != null && stopAz != null && startAz.Length == NRays && stopAz.Length == NRays) {
@@ -177,7 +181,7 @@ public sealed class EWRPolarScan : IDisposable, IRadarDataset<float> {
             for (int i = 0; i < NRays; i++)
                 Azimuths[i] = (float)((startAz[i] + stopAz[i]) / 2.0);
         } else {
-            Azimuths = Array.Empty<float>();
+            Azimuths = [];
         }
 
         for (int k = 0; k < keys.Length; k++) {
@@ -186,29 +190,21 @@ public sealed class EWRPolarScan : IDisposable, IRadarDataset<float> {
             what = g.Group("what");
             float gain = what.GetAttribute<double, float>("gain");
             float offset = what.GetAttribute<double, float>("offset");
+            _raw[k] = g.Dataset("data").Read<float[,]>();
+            if (gain != 1.0f || offset != 0.0f) {
 
-            try {
-                var src = g.Dataset("data").Read<float[,]>();
+                for (int i = 0; i < NRays; i++)
+                    for (int j = 0; j < NBins; j++) {
+                        _raw[k][i, j] *= gain;
+                        _raw[k][i, j] += offset;
+                    }
+                //     // Allocate the array before writing to it
+                //     _raw[k] = new float[NRays, NBins];
+                // } else {
+                //     _raw[k] = src;
+                // }
 
-                // If we got dimensions from data, verify they match
-                if (dimensionsFromData && (src.GetLength(0) != NRays || src.GetLength(1) != NBins)) {
-                    NRays = src.GetLength(0);
-                    NBins = src.GetLength(1);
-                }
 
-                if (gain != 1.0f || offset != 0.0f) {
-                    // Allocate the array before writing to it
-                    _raw[k] = new float[NRays, NBins];
-                    for (int i = 0; i < NRays; i++)
-                        for (int j = 0; j < NBins; j++)
-                            _raw[k][i, j] = src[i, j] * gain + offset;
-                } else {
-                    _raw[k] = src;
-                }
-            } catch (Exception ex) {
-                // If we can't read the dataset, create an empty array
-                _raw[k] = new float[NRays, NBins];
-                System.Diagnostics.Debug.WriteLine($"Failed to read {key}: {ex.Message}");
             }
         }
         _cachedGeodetic = null;
@@ -257,13 +253,13 @@ public sealed class EWRPolarScan : IDisposable, IRadarDataset<float> {
     /// Thread-local structure to hold min/max values for parallel processing.
     /// </summary>
     private struct ThreadLocalMinMax {
-        public float LatMin;
+        public float _latMin;
         public float LatMax;
         public float LonMin;
         public float LonMax;
 
         public ThreadLocalMinMax() {
-            LatMin = float.MaxValue;
+            _latMin = float.MaxValue;
             LatMax = float.MinValue;
             LonMin = float.MaxValue;
             LonMax = float.MinValue;
@@ -345,7 +341,7 @@ public sealed class EWRPolarScan : IDisposable, IRadarDataset<float> {
                     // Update thread-local min/max values
                     float latF = (float)latDeg;
                     float lonF = (float)lonDeg;
-                    if (latF < local.LatMin) local.LatMin = latF;
+                    if (latF < local._latMin) local._latMin = latF;
                     if (latF > local.LatMax) local.LatMax = latF;
                     if (lonF < local.LonMin) local.LonMin = lonF;
                     if (lonF > local.LonMax) local.LonMax = lonF;
@@ -356,7 +352,7 @@ public sealed class EWRPolarScan : IDisposable, IRadarDataset<float> {
             // localFinally - reduce thread-local values into global min/max
             (local) => {
                 lock (lockObj) {
-                    if (local.LatMin < latMin) latMin = local.LatMin;
+                    if (local._latMin < latMin) latMin = local._latMin;
                     if (local.LatMax > latMax) latMax = local.LatMax;
                     if (local.LonMin < lonMin) lonMin = local.LonMin;
                     if (local.LonMax > lonMax) lonMax = local.LonMax;
