@@ -1,125 +1,30 @@
-@page "/radar"
+@page "/"
 @rendermode InteractiveWebAssembly
 @using System.Net.Http.Json
 @using Microsoft.AspNetCore.Components
 @using Microsoft.AspNetCore.SignalR.Client
 @using RadarMoves.Client.Services
+@using RadarMoves.Shared.Services
 @inject IServiceProvider ServiceProvider
 @inject NavigationManager NavigationManager
 @inject ILogger<RadarViewer> Logger
 @inject ImageCacheService ImageCache
+@inject RadarControlsService ControlsService
 @implements IAsyncDisposable
+@implements IDisposable
 
 <PageTitle>Radar Viewer</PageTitle>
 
 <div class="radar-viewer-container">
-    <div class="controls-panel">
-        <h3>Radar Data Controls</h3>
-
-        <!-- Channel Selection -->
-        <div class="control-group">
-            <label for="channel-select">Channel:</label>
-            <select id="channel-select" value="@SelectedChannel" @onchange="@(async (ChangeEventArgs e) => { SelectedChannel = e.Value?.ToString() ?? "Reflectivity"; await OnChannelChanged(); })" class="form-control">
-                @foreach (var channel in AvailableChannels)
-                {
-                    <option value="@channel">@channel</option>
-                }
-            </select>
-        </div>
-
-        <!-- Time Slider -->
-        <div class="control-group">
-            <label for="time-slider">Time: @(Timestamps.Count > 0 ? SelectedTime.ToString("yyyy-MM-dd HH:mm:ss") : "No data")</label>
-            <input type="range" id="time-slider" 
-                   min="0" max="@(Math.Max(0, Timestamps.Count - 1))" 
-                   step="1" 
-                   value="@TimeIndex"
-                   @oninput="@(async (ChangeEventArgs e) => { if (int.TryParse(e.Value?.ToString(), out var idx) && idx >= 0 && idx < Timestamps.Count) { TimeIndex = idx; await OnTimeChanged(); } })"
-                   class="slider"
-                   disabled="@(Timestamps.Count == 0)" />
-            <div class="slider-labels">
-                <span>@(TimeRange?.Start.ToString("HH:mm") ?? "")</span>
-                <span>@(TimeRange?.End.ToString("HH:mm") ?? "")</span>
-            </div>
-        </div>
-
-        <!-- Elevation Slider -->
-        <div class="control-group">
-            <label for="elevation-slider">Elevation: @(ElevationAngles.Count > 0 ? SelectedElevation.ToString("F2") : "N/A")°</label>
-            <input type="range" id="elevation-slider" 
-                   min="0" max="@(Math.Max(0, ElevationAngles.Count - 1))" 
-                   step="1" 
-                   value="@ElevationIndex"
-                   @oninput="@(async (ChangeEventArgs e) => { if (int.TryParse(e.Value?.ToString(), out var idx) && idx >= 0 && idx < ElevationAngles.Count) { ElevationIndex = idx; await OnElevationChanged(); } })"
-                   class="slider"
-                   disabled="@(!ElevationAngles.Any())" />
-            @if (ElevationAngles.Any())
-            {
-                <div class="slider-labels">
-                    <span>@ElevationAngles.First().ToString("F2")°</span>
-                    <span>@ElevationAngles.Last().ToString("F2")°</span>
-                </div>
-            }
-        </div>
-
-        <!-- Latitude/Longitude Inputs -->
-        <div class="control-group">
-            <label for="lat-input">Latitude:</label>
-            <input type="number" id="lat-input" value="@Latitude" @oninput="@(async (ChangeEventArgs e) => { if (float.TryParse(e.Value?.ToString(), out var val)) { Latitude = val; await OnLocationChanged(); } })" step="0.0001" class="form-control" />
-        </div>
-
-        <div class="control-group">
-            <label for="lon-input">Longitude:</label>
-            <input type="number" id="lon-input" value="@Longitude" @oninput="@(async (ChangeEventArgs e) => { if (float.TryParse(e.Value?.ToString(), out var val)) { Longitude = val; await OnLocationChanged(); } })" step="0.0001" class="form-control" />
-        </div>
-
-        <!-- Data Value Display -->
-        <div class="control-group">
-            <div class="value-display">
-                <strong>Value:</strong>
-                @if (CurrentValue.HasValue)
-                {
-                    <span class="value-text">@CurrentValue.Value.ToString("F2")</span>
-                }
-                else
-                {
-                    <span class="value-text no-data">N/A</span>
-                }
-            </div>
-        </div>
-
-        <!-- Metadata Display -->
-        @if (ScanMetadata != null)
-        {
-            <div class="control-group metadata">
-                <h4>Scan Metadata</h4>
-                <div class="metadata-item">
-                    <span>Rays:</span> <span>@ScanMetadata.NRays</span>
-                </div>
-                <div class="metadata-item">
-                    <span>Bins:</span> <span>@ScanMetadata.NBins</span>
-                </div>
-                <div class="metadata-item">
-                    <span>Location:</span> <span>@ScanMetadata.Latitude.ToString("F4")°, @ScanMetadata.Longitude.ToString("F4")°</span>
-                </div>
-            </div>
-        }
-
-        @if (!string.IsNullOrEmpty(ErrorMessage))
-        {
-            <div class="error-message">@ErrorMessage</div>
-        }
-    </div>
-
     <div class="viewer-main">
         <div class="status-bar">
             @if (IsLoading)
             {
                 <span>Loading...</span>
             }
-            else if (Timestamps.Count > 0)
+            else if (ControlsService.Timestamps.Count > 0)
             {
-                <span>Loaded @Timestamps.Count time points</span>
+                <span>Loaded @ControlsService.Timestamps.Count time points - View: @ControlsService.SelectedViewType</span>
             }
             else
             {
@@ -143,50 +48,37 @@
                 </div>
             }
         </div>
+
+        <!-- Value Display (only for Radar view) -->
+        @if (ControlsService.SelectedViewType == "Radar" && CurrentValue.HasValue)
+        {
+            <div class="value-display-panel">
+                <strong>Value at (@ControlsService.Latitude.ToString("F4")°,
+                    @ControlsService.Longitude.ToString("F4")°):</strong>
+                <span class="value-text">@CurrentValue.Value.ToString("F2")</span>
+            </div>
+        }
     </div>
 </div>
 
 @code {
-    private List<string> Timestamps { get; set; } = new();
-    private List<float> ElevationAngles { get; set; } = new();
-    private List<string> AvailableChannels { get; set; } = new() { "Reflectivity", "RadialVelocity", "SpectralWidth", "TotalPower" };
-    
-    private string SelectedChannel { get; set; } = "Reflectivity";
-    private int TimeIndex { get; set; } = 0;
-    private int ElevationIndex { get; set; } = 0;
-    private float Latitude { get; set; } = 38.9f;
-    private float Longitude { get; set; } = -92.3f;
-    
-    private DateTime SelectedTime {
-        get {
-            if (TimeIndex >= 0 && TimeIndex < Timestamps.Count && DateTime.TryParse(Timestamps[TimeIndex], out var dt))
-                return dt;
-            return DateTime.Now;
-        }
-    }
-    
-    private float SelectedElevation {
-        get {
-            if (ElevationIndex >= 0 && ElevationIndex < ElevationAngles.Count)
-                return ElevationAngles[ElevationIndex];
-            return 0f;
-        }
-    }
-    
     private float? CurrentValue { get; set; }
     private ScanMetadataDto? ScanMetadata { get; set; }
-    private (DateTime Start, DateTime End)? TimeRange { get; set; }
-    
+
     private bool IsLoading { get; set; } = true;
     private string? ErrorMessage { get; set; }
     private HttpClient? Http { get; set; }
     private string? ImageUrl { get; set; }
-    
-    // SignalR Hub Connection
+
+    // SignalR Hub Connection (only for Radar view)
     private HubConnection? _hubConnection;
+    private bool _isDisposed = false;
 
     protected override async Task OnInitializedAsync()
     {
+        // Subscribe to controls service changes
+        ControlsService.OnStateChanged += OnControlsChanged;
+
         // Get HttpClient from service provider (works for both server and client rendering)
         Http = ServiceProvider.GetService<HttpClient>();
         if (Http == null)
@@ -196,55 +88,92 @@
             var baseAddress = NavigationManager.BaseUri;
             Http = new HttpClient { BaseAddress = new Uri(baseAddress) };
         }
-        
-        // Initialize SignalR hub connection
-        _hubConnection = new HubConnectionBuilder()
+
+        // Initialize SignalR hub connection only for Radar view
+        if (ControlsService.SelectedViewType == "Radar")
+        {
+            _hubConnection = new HubConnectionBuilder()
             .WithUrl(NavigationManager.ToAbsoluteUri("/radarDataHub"))
             .Build();
 
-        // Register event handlers
-        RegisterEventHandlers();
+            // Register event handlers
+            RegisterEventHandlers();
 
-        // Handle connection lifecycle
-        _hubConnection.Closed += async (error) =>
-        {
-            Logger.LogWarning("Hub connection closed: {Error}", error?.Message);
-            await Task.Delay(2000);
+            // Handle connection lifecycle
+            _hubConnection.Closed += async (error) =>
+            {
+                if (_isDisposed) return;
+                Logger.LogWarning("Hub connection closed: {Error}", error?.Message);
+                await Task.Delay(2000);
+                if (!_isDisposed && _hubConnection != null)
+                {
+                    await StartConnection();
+                }
+            };
+
+            _hubConnection.Reconnecting += (error) =>
+            {
+                Logger.LogInformation("Hub reconnecting: {Error}", error?.Message);
+                return Task.CompletedTask;
+            };
+
+            _hubConnection.Reconnected += (connectionId) =>
+            {
+                Logger.LogInformation("Hub reconnected: {ConnectionId}", connectionId);
+                return Task.CompletedTask;
+            };
+
+            // Start hub connection and load initial data
             await StartConnection();
-        };
-
-        _hubConnection.Reconnecting += (error) =>
+            await LoadProcessedTimestamps();
+        }
+        else
         {
-            Logger.LogInformation("Hub reconnecting: {Error}", error?.Message);
-            return Task.CompletedTask;
-        };
+            // For Raw Data and Filtered Data, use regular API
+            await LoadMetadata();
+        }
 
-        _hubConnection.Reconnected += (connectionId) =>
-        {
-            Logger.LogInformation("Hub reconnected: {ConnectionId}", connectionId);
-            return Task.CompletedTask;
-        };
-
-        // Start hub connection and load initial data
-        await StartConnection();
-        await LoadProcessedTimestamps();
-        
-        if (Timestamps.Count > 0)
+        if (ControlsService.Timestamps.Count > 0)
         {
             // Default to first timestamp
-            TimeIndex = 0;
+            ControlsService.TimeIndex = 0;
             await LoadElevations();
-            if (ElevationAngles.Count > 0)
+            if (ControlsService.ElevationAngles.Count > 0)
             {
                 // Default to first elevation
-                ElevationIndex = 0;
+                ControlsService.ElevationIndex = 0;
                 await LoadScanMetadata();
-                await LoadValue();
+                if (ControlsService.SelectedViewType == "Radar")
+                {
+                    await LoadValue();
+                }
                 await LoadImage();
             }
         }
-        
+
         IsLoading = false;
+    }
+
+    private async void OnControlsChanged()
+    {
+        // If view type changed, reinitialize SignalR if needed
+        if (ControlsService.SelectedViewType == "Radar" && _hubConnection == null)
+        {
+            _hubConnection = new HubConnectionBuilder()
+            .WithUrl(NavigationManager.ToAbsoluteUri("/radarDataHub"))
+            .Build();
+            RegisterEventHandlers();
+            await StartConnection();
+            await LoadProcessedTimestamps();
+        }
+        else if (ControlsService.SelectedViewType != "Radar" && _hubConnection != null)
+        {
+            await _hubConnection.DisposeAsync();
+            _hubConnection = null;
+        }
+
+        await OnTimeChanged();
+        await InvokeAsync(StateHasChanged);
     }
 
     private void RegisterEventHandlers()
@@ -255,39 +184,41 @@
         _hubConnection.On<DateTime, float[]>("PVOLProcessed", async (timestamp, elevations) =>
         {
             Logger.LogInformation("PVOL processed: {Timestamp} with {Count} elevations", timestamp, elevations.Length);
-            
+
             // Add new timestamp if not already present
             var timestampString = timestamp.ToString("yyyy-MM-ddTHH:mm:ss");
-            var wasEmpty = Timestamps.Count == 0;
-            var currentTimestamp = TimeIndex < Timestamps.Count ? Timestamps[TimeIndex] : null;
-            
-            if (!Timestamps.Contains(timestampString))
+            var wasEmpty = ControlsService.Timestamps.Count == 0;
+            var currentTimestamp = ControlsService.TimeIndex < ControlsService.Timestamps.Count ?
+    ControlsService.Timestamps[ControlsService.TimeIndex] : null;
+
+            if (!ControlsService.Timestamps.Contains(timestampString))
             {
-                Timestamps.Add(timestampString);
-                Timestamps.Sort(); // Keep timestamps sorted
-                
+                ControlsService.Timestamps.Add(timestampString);
+                ControlsService.Timestamps.Sort(); // Keep timestamps sorted
+
                 // Update time range
-                if (Timestamps.Count > 0)
+                if (ControlsService.Timestamps.Count > 0)
                 {
-                    var first = DateTime.Parse(Timestamps.First());
-                    var last = DateTime.Parse(Timestamps.Last());
-                    TimeRange = (first, last);
+                    var first = DateTime.Parse(ControlsService.Timestamps.First());
+                    var last = DateTime.Parse(ControlsService.Timestamps.Last());
+                    ControlsService.TimeRange = (first, last);
                 }
-                
+
                 // If this is the first timestamp, select it and load data
                 if (wasEmpty)
                 {
-                    TimeIndex = Timestamps.IndexOf(timestampString);
+                    ControlsService.TimeIndex = ControlsService.Timestamps.IndexOf(timestampString);
                     await LoadElevations();
-                    if (ElevationAngles.Count > 0)
+                    if (ControlsService.ElevationAngles.Count > 0)
                     {
-                        ElevationIndex = 0;
+                        ControlsService.ElevationIndex = 0;
                         await LoadScanMetadata();
                         await LoadValue();
                         await LoadImage();
                     }
                 }
-                
+
+                ControlsService.NotifyStateChanged();
                 await InvokeAsync(StateHasChanged);
             }
             else
@@ -308,13 +239,23 @@
 
     private async Task StartConnection()
     {
-        if (_hubConnection?.State == HubConnectionState.Disconnected)
+        if (_isDisposed || _hubConnection == null) return;
+
+        if (_hubConnection.State == HubConnectionState.Disconnected)
         {
             try
             {
                 await _hubConnection.StartAsync();
-                await _hubConnection.SendAsync("SubscribeToPVOLUpdates");
-                Logger.LogInformation("Connected to RadarDataHub and subscribed to PVOL updates");
+                if (!_isDisposed && _hubConnection != null)
+                {
+                    await _hubConnection.SendAsync("SubscribeToPVOLUpdates");
+                    Logger.LogInformation("Connected to RadarDataHub and subscribed to PVOL updates");
+                }
+            }
+            catch (ObjectDisposedException)
+            {
+                // Connection was disposed, ignore
+                Logger.LogDebug("Hub connection was disposed during start");
             }
             catch (Exception ex)
             {
@@ -336,22 +277,22 @@
         {
             IsLoading = true;
             var pvolTimestamps = await _hubConnection.InvokeAsync<IEnumerable<DateTime>>("GetAvailablePVOLs");
-            
+
             // Convert to string list and sort
-            Timestamps = pvolTimestamps
-                .Select(t => t.ToString("yyyy-MM-ddTHH:mm:ss"))
-                .OrderBy(t => t)
-                .ToList();
-            
+            ControlsService.Timestamps = pvolTimestamps
+            .Select(t => t.ToString("yyyy-MM-ddTHH:mm:ss"))
+            .OrderBy(t => t)
+            .ToList();
+
             // Update time range if we have timestamps
-            if (Timestamps.Count > 0)
+            if (ControlsService.Timestamps.Count > 0)
             {
-                var first = DateTime.Parse(Timestamps.First());
-                var last = DateTime.Parse(Timestamps.Last());
-                TimeRange = (first, last);
+                var first = DateTime.Parse(ControlsService.Timestamps.First());
+                var last = DateTime.Parse(ControlsService.Timestamps.Last());
+                ControlsService.TimeRange = (first, last);
             }
-            
-            Logger.LogInformation("Loaded {Count} processed PVOL timestamps", Timestamps.Count);
+
+            Logger.LogInformation("Loaded {Count} processed PVOL timestamps", ControlsService.Timestamps.Count);
         }
         catch (Exception ex)
         {
@@ -364,69 +305,106 @@
         }
     }
 
-    // LoadMetadata is no longer needed - we use LoadProcessedTimestamps instead
-    // Keeping this method for potential future use or if we need metadata for other purposes
+    private async Task LoadMetadata()
+    {
+        if (Http == null) return;
+        try
+        {
+            IsLoading = true;
+            var response = await Http.GetFromJsonAsync<MetadataResponse>("api/RadarData/metadata");
+            if (response != null && response.TimeRange != null)
+            {
+                ControlsService.TimeRange = (response.TimeRange.Start, response.TimeRange.End);
+            }
+
+            var timestamps = await Http.GetFromJsonAsync<List<string>>("api/RadarData/timestamps");
+            if (timestamps != null)
+            {
+                ControlsService.Timestamps = timestamps;
+                if (ControlsService.Timestamps.Count > 0 && ControlsService.TimeIndex >= ControlsService.Timestamps.Count)
+                {
+                    ControlsService.TimeIndex = 0;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            ErrorMessage = $"Error loading metadata: {ex.Message}";
+            Logger.LogError(ex, "Error loading metadata");
+        }
+        finally
+        {
+            IsLoading = false;
+        }
+    }
 
     private async Task LoadElevations()
     {
-        if (Http == null || _hubConnection == null) return;
+        if (Http == null) return;
         try
         {
-            if (Timestamps.Count == 0) return;
+            if (ControlsService.Timestamps.Count == 0) return;
 
-            var timestamp = Timestamps[TimeIndex];
-            if (!DateTime.TryParse(timestamp, out var dt))
-            {
-                Logger.LogWarning("Invalid timestamp format: {Timestamp}", timestamp);
-                return;
-            }
+            var timestamp = ControlsService.Timestamps[ControlsService.TimeIndex];
 
-            // Try to get elevations from hub (processed PVOL metadata)
-            if (_hubConnection.State == HubConnectionState.Connected)
+            // For Radar view, try SignalR first
+            if (ControlsService.SelectedViewType == "Radar" && _hubConnection != null)
             {
-                try
+                if (!DateTime.TryParse(timestamp, out var dt))
                 {
-                    var metadata = await _hubConnection.InvokeAsync<object?>("GetPVOLMetadata", dt);
-                    if (metadata != null)
+                    Logger.LogWarning("Invalid timestamp format: {Timestamp}", timestamp);
+                    return;
+                }
+
+                // Try to get elevations from hub (processed PVOL metadata)
+                if (_hubConnection.State == HubConnectionState.Connected)
+                {
+                    try
                     {
-                        // Parse the metadata to get elevations
-                        var metadataJson = System.Text.Json.JsonSerializer.Serialize(metadata);
-                        var doc = System.Text.Json.JsonDocument.Parse(metadataJson);
-                        if (doc.RootElement.TryGetProperty("elevations", out var elevationsElement))
+                        var metadata = await _hubConnection.InvokeAsync<object?>("GetPVOLMetadata", dt);
+                        if (metadata != null)
                         {
-                            var elevations = elevationsElement.EnumerateArray()
+                            // Parse the metadata to get elevations
+                            var metadataJson = System.Text.Json.JsonSerializer.Serialize(metadata);
+                            var doc = System.Text.Json.JsonDocument.Parse(metadataJson);
+                            if (doc.RootElement.TryGetProperty("elevations", out var elevationsElement))
+                            {
+                                var elevations = elevationsElement.EnumerateArray()
                                 .Select(e => e.GetSingle())
                                 .OrderBy(e => e)
                                 .ToList();
-                            
-                            if (elevations.Count > 0)
-                            {
-                                ElevationAngles = elevations;
-                                // Ensure ElevationIndex is valid
-                                if (ElevationIndex >= ElevationAngles.Count)
+
+                                if (elevations.Count > 0)
                                 {
-                                    ElevationIndex = 0;
+                                    ControlsService.ElevationAngles = elevations;
+                                    // Ensure ElevationIndex is valid
+                                    if (ControlsService.ElevationIndex >= ControlsService.ElevationAngles.Count)
+                                    {
+                                        ControlsService.ElevationIndex = 0;
+                                    }
+                                    return;
                                 }
-                                return;
                             }
                         }
                     }
-                }
-                catch (Exception ex)
-                {
-                    Logger.LogDebug("Could not get elevations from hub, falling back to API: {Error}", ex.Message);
+                    catch (Exception ex)
+                    {
+                        Logger.LogDebug("Could not get elevations from hub, falling back to API: {Error}", ex.Message);
+                    }
                 }
             }
 
-            // Fallback to API endpoint if hub doesn't have the data
-            var apiElevations = await Http.GetFromJsonAsync<List<float>>($"api/RadarData/elevations/{Uri.EscapeDataString(timestamp)}");
+            // Fallback to API endpoint if hub doesn't have the data or not using Radar view
+            var apiElevations = await
+            Http.GetFromJsonAsync<List<float>>($"api/RadarData/elevations/{Uri.EscapeDataString(timestamp)}");
             if (apiElevations != null)
             {
-                ElevationAngles = apiElevations.OrderBy(e => e).ToList();
+                ControlsService.ElevationAngles = apiElevations.OrderBy(e => e).ToList();
                 // ElevationIndex is already set to 0 by default, but ensure it's valid
-                if (ElevationAngles.Count > 0 && ElevationIndex >= ElevationAngles.Count)
+                if (ControlsService.ElevationAngles.Count > 0 && ControlsService.ElevationIndex >=
+                ControlsService.ElevationAngles.Count)
                 {
-                    ElevationIndex = 0;
+                    ControlsService.ElevationIndex = 0;
                 }
             }
         }
@@ -442,11 +420,12 @@
         if (Http == null) return;
         try
         {
-            if (Timestamps.Count == 0 || ElevationAngles.Count == 0) return;
+            if (ControlsService.Timestamps.Count == 0 || ControlsService.ElevationAngles.Count == 0) return;
 
-            var timestamp = Timestamps[TimeIndex];
-            var elevation = SelectedElevation;
-            var response = await Http.GetFromJsonAsync<ScanMetadataDto>($"api/RadarData/scan/{Uri.EscapeDataString(timestamp)}/{elevation}");
+            var timestamp = ControlsService.Timestamps[ControlsService.TimeIndex];
+            var elevation = ControlsService.SelectedElevation;
+            var response = await
+            Http.GetFromJsonAsync<ScanMetadataDto>($"api/RadarData/scan/{Uri.EscapeDataString(timestamp)}/{elevation}");
             if (response != null)
             {
                 ScanMetadata = response;
@@ -460,31 +439,32 @@
 
     private async Task LoadValue()
     {
-        if (Http == null) return;
+        if (Http == null || ControlsService.SelectedViewType != "Radar") return;
         try
         {
-            if (Timestamps.Count == 0 || ElevationAngles.Count == 0) 
+            if (ControlsService.Timestamps.Count == 0 || ControlsService.ElevationAngles.Count == 0)
             {
                 CurrentValue = null;
                 return;
             }
 
-            var timestamp = Timestamps[TimeIndex];
-            var elevation = SelectedElevation;
-            
+            var timestamp = ControlsService.Timestamps[ControlsService.TimeIndex];
+            var elevation = ControlsService.SelectedElevation;
+
             // Don't try to load if elevation is invalid
-            if (elevation <= 0 || ElevationIndex < 0 || ElevationIndex >= ElevationAngles.Count)
+            if (elevation <= 0 || ControlsService.ElevationIndex < 0 || ControlsService.ElevationIndex >=
+            ControlsService.ElevationAngles.Count)
             {
                 CurrentValue = null;
                 return;
             }
-            
+
             // Try to get value by lat/lon if provided, otherwise use ray/bin 0,0
             ValueResponse? response = null;
             try
             {
                 response = await Http.GetFromJsonAsync<ValueResponse>(
-                    $"api/RadarData/value-geo/{SelectedChannel}/{Uri.EscapeDataString(timestamp)}/{elevation}/{Latitude}/{Longitude}");
+                $"api/RadarData/value-geo/{ControlsService.SelectedChannel}/{Uri.EscapeDataString(timestamp)}/{elevation}/{ControlsService.Latitude}/{ControlsService.Longitude}");
             }
             catch (Exception ex1)
             {
@@ -493,7 +473,7 @@
                 try
                 {
                     response = await Http.GetFromJsonAsync<ValueResponse>(
-                        $"api/RadarData/value/{SelectedChannel}/{Uri.EscapeDataString(timestamp)}/{elevation}/0/0");
+                    $"api/RadarData/value/{ControlsService.SelectedChannel}/{Uri.EscapeDataString(timestamp)}/{elevation}/0/0");
                 }
                 catch (Exception ex2)
                 {
@@ -522,29 +502,11 @@
     {
         await LoadElevations();
         await LoadScanMetadata();
-        await LoadValue();
+        if (ControlsService.SelectedViewType == "Radar")
+        {
+            await LoadValue();
+        }
         await LoadImage();
-        StateHasChanged();
-    }
-
-    private async Task OnElevationChanged()
-    {
-        await LoadScanMetadata();
-        await LoadValue();
-        await LoadImage();
-        StateHasChanged();
-    }
-
-    private async Task OnChannelChanged()
-    {
-        await LoadValue();
-        await LoadImage();
-        StateHasChanged();
-    }
-
-    private async Task OnLocationChanged()
-    {
-        await LoadValue();
         StateHasChanged();
     }
 
@@ -553,60 +515,83 @@
         if (Http == null) return;
         try
         {
-            if (Timestamps.Count == 0 || ElevationAngles.Count == 0)
+            if (ControlsService.Timestamps.Count == 0 || ControlsService.ElevationAngles.Count == 0)
             {
                 ImageUrl = null;
                 return;
             }
 
-            var timestamp = Timestamps[TimeIndex];
-            var elevation = SelectedElevation;
+            var timestamp = ControlsService.Timestamps[ControlsService.TimeIndex];
+            var elevation = ControlsService.SelectedElevation;
 
-            if (elevation <= 0 || ElevationIndex < 0 || ElevationIndex >= ElevationAngles.Count)
+            if (elevation <= 0 || ControlsService.ElevationIndex < 0 || ControlsService.ElevationIndex >=
+            ControlsService.ElevationAngles.Count)
             {
                 ImageUrl = null;
                 return;
             }
 
-            // Check cache first
-            var cachedImage = await ImageCache.GetCachedImageAsync(SelectedChannel, timestamp, elevation);
-            if (cachedImage != null)
+            // Determine API endpoint based on view type
+            string imageUrl;
+            if (ControlsService.SelectedViewType == "Raw Data")
             {
-                ImageUrl = cachedImage;
-                Logger.LogDebug("Using cached image for {Channel}/{Timestamp}/{Elevation}", SelectedChannel, timestamp, elevation);
+                var elevationStr = elevation.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                imageUrl =
+                $"api/RadarData/raw/{ControlsService.SelectedChannel}/{Uri.EscapeDataString(timestamp)}/{elevationStr}?t={DateTime.Now.Ticks}";
+                ImageUrl = imageUrl;
                 return;
             }
-
-            // Not in cache, fetch from server
-            var imageUrl = $"api/RadarData/image/{SelectedChannel}/{Uri.EscapeDataString(timestamp)}/{elevation}";
-            
-            try
+            else if (ControlsService.SelectedViewType == "Filtered Data")
             {
-                var response = await Http.GetAsync(imageUrl);
-                if (response.IsSuccessStatusCode)
+                var elevationStr = elevation.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                imageUrl =
+                $"api/RadarData/filtered/{ControlsService.SelectedChannel}/{Uri.EscapeDataString(timestamp)}/{elevationStr}?t={DateTime.Now.Ticks}";
+                ImageUrl = imageUrl;
+                return;
+            }
+            else // Radar view
+            {
+                // Check cache first
+                var cachedImage = await ImageCache.GetCachedImageAsync(ControlsService.SelectedChannel, timestamp, elevation);
+                if (cachedImage != null)
                 {
-                    var imageBytes = await response.Content.ReadAsByteArrayAsync();
-                    
-                    // Store in cache for future use
-                    await ImageCache.CacheImageAsync(SelectedChannel, timestamp, elevation, imageBytes);
-                    
-                    // Convert to data URL for display
-                    var base64 = Convert.ToBase64String(imageBytes);
-                    ImageUrl = $"data:image/png;base64,{base64}";
-                    
-                    Logger.LogDebug("Fetched and cached image for {Channel}/{Timestamp}/{Elevation} ({Size} bytes)", 
-                        SelectedChannel, timestamp, elevation, imageBytes.Length);
+                    ImageUrl = cachedImage;
+                    Logger.LogDebug("Using cached image for {Channel}/{Timestamp}/{Elevation}", ControlsService.SelectedChannel, timestamp,
+                    elevation);
+                    return;
                 }
-                else
+
+                // Not in cache, fetch from server
+                imageUrl = $"api/RadarData/image/{ControlsService.SelectedChannel}/{Uri.EscapeDataString(timestamp)}/{elevation}";
+
+                try
                 {
-                    Logger.LogWarning("Failed to fetch image: {StatusCode}", response.StatusCode);
+                    var response = await Http.GetAsync(imageUrl);
+                    if (response.IsSuccessStatusCode)
+                    {
+                        var imageBytes = await response.Content.ReadAsByteArrayAsync();
+
+                        // Store in cache for future use
+                        await ImageCache.CacheImageAsync(ControlsService.SelectedChannel, timestamp, elevation, imageBytes);
+
+                        // Convert to data URL for display
+                        var base64 = Convert.ToBase64String(imageBytes);
+                        ImageUrl = $"data:image/png;base64,{base64}";
+
+                        Logger.LogDebug("Fetched and cached image for {Channel}/{Timestamp}/{Elevation} ({Size} bytes)",
+                        ControlsService.SelectedChannel, timestamp, elevation, imageBytes.Length);
+                    }
+                    else
+                    {
+                        Logger.LogWarning("Failed to fetch image: {StatusCode}", response.StatusCode);
+                        ImageUrl = null;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogError(ex, "Error fetching image from server");
                     ImageUrl = null;
                 }
-            }
-            catch (Exception ex)
-            {
-                Logger.LogError(ex, "Error fetching image from server");
-                ImageUrl = null;
             }
         }
         catch (Exception ex)
@@ -648,11 +633,26 @@
         public float Value { get; set; }
     }
 
+    public void Dispose()
+    {
+        _isDisposed = true;
+        ControlsService.OnStateChanged -= OnControlsChanged;
+    }
+
     public async ValueTask DisposeAsync()
     {
+        _isDisposed = true;
         if (_hubConnection is not null)
         {
-            await _hubConnection.DisposeAsync();
+            try
+            {
+                await _hubConnection.DisposeAsync();
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning(ex, "Error disposing hub connection");
+            }
+            _hubConnection = null;
         }
     }
 }
@@ -660,139 +660,9 @@
 <style>
     .radar-viewer-container {
         display: flex;
-        gap: 20px;
-        padding: 20px;
-        height: 100vh;
+        flex-direction: column;
+        height: 100%;
         font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-    }
-
-    .controls-panel {
-        width: 300px;
-        padding: 20px;
-        background-color: #f5f5f5;
-        border-radius: 8px;
-        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-        overflow-y: auto;
-        max-height: calc(100vh - 40px);
-    }
-
-    .controls-panel h3 {
-        margin-top: 0;
-        margin-bottom: 20px;
-        color: #333;
-        border-bottom: 2px solid #ddd;
-        padding-bottom: 10px;
-    }
-
-    .control-group {
-        margin-bottom: 20px;
-    }
-
-    .control-group label {
-        display: block;
-        margin-bottom: 8px;
-        font-weight: 500;
-        color: #555;
-    }
-
-    .form-control {
-        width: 100%;
-        padding: 8px 12px;
-        border: 1px solid #ddd;
-        border-radius: 4px;
-        font-size: 14px;
-        box-sizing: border-box;
-    }
-
-    .slider {
-        width: 100%;
-        height: 8px;
-        border-radius: 5px;
-        background: #ddd;
-        outline: none;
-        -webkit-appearance: none;
-    }
-
-    .slider::-webkit-slider-thumb {
-        -webkit-appearance: none;
-        appearance: none;
-        width: 20px;
-        height: 20px;
-        border-radius: 50%;
-        background: #4CAF50;
-        cursor: pointer;
-    }
-
-    .slider::-moz-range-thumb {
-        width: 20px;
-        height: 20px;
-        border-radius: 50%;
-        background: #4CAF50;
-        cursor: pointer;
-        border: none;
-    }
-
-    .slider:disabled {
-        opacity: 0.5;
-        cursor: not-allowed;
-    }
-
-    .slider-labels {
-        display: flex;
-        justify-content: space-between;
-        margin-top: 5px;
-        font-size: 12px;
-        color: #666;
-    }
-
-    .value-display {
-        padding: 15px;
-        background-color: #e3f2fd;
-        border-radius: 4px;
-        text-align: center;
-    }
-
-    .value-text {
-        display: block;
-        font-size: 24px;
-        font-weight: bold;
-        color: #1976d2;
-        margin-top: 5px;
-    }
-
-    .value-text.no-data {
-        color: #999;
-        font-size: 18px;
-    }
-
-    .metadata {
-        margin-top: 20px;
-        padding-top: 20px;
-        border-top: 1px solid #ddd;
-    }
-
-    .metadata h4 {
-        margin-top: 0;
-        margin-bottom: 10px;
-        font-size: 16px;
-        color: #333;
-    }
-
-    .metadata-item {
-        display: flex;
-        justify-content: space-between;
-        padding: 5px 0;
-        font-size: 14px;
-        color: #666;
-    }
-
-    .error-message {
-        padding: 10px;
-        background-color: #ffebee;
-        color: #c62828;
-        border-radius: 4px;
-        margin-top: 10px;
-        font-size: 14px;
     }
 
     .viewer-main {
@@ -803,6 +673,7 @@
         border-radius: 8px;
         box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
         overflow: hidden;
+        margin: 20px;
     }
 
     .status-bar {
@@ -856,5 +727,19 @@
         font-size: 14px;
         font-style: italic;
     }
-</style>
 
+    .value-display-panel {
+        padding: 15px 20px;
+        background-color: #e3f2fd;
+        border-top: 1px solid #ddd;
+        text-align: center;
+    }
+
+    .value-text {
+        display: block;
+        font-size: 24px;
+        font-weight: bold;
+        color: #1976d2;
+        margin-top: 5px;
+    }
+</style>

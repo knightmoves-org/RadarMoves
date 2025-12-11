@@ -1,12 +1,14 @@
 using Microsoft.AspNetCore.ResponseCompression;
 using Microsoft.AspNetCore.Components.Server.ProtectedBrowserStorage;
 using StackExchange.Redis;
+using System.Text.Json.Serialization;
 
 using RadarMoves.Server.Components;
 using RadarMoves.Server.Services;
 using RadarMoves.Server.Hubs;
 using RadarMoves.Server.Data;
 using RadarMoves.Server.Data.Caching;
+using RadarMoves.Shared.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -66,7 +68,12 @@ builder.Services.AddSingleton<IRadarDataProvider>(sp => {
 builder.Services.AddSingleton<RadarDatasetService>();
 builder.Services.AddScoped<RadarMoves.Server.Services.ImageCacheService>();
 builder.Services.AddScoped<RadarMoves.Client.Services.ImageCacheService>();
-builder.Services.AddControllers();
+// Register radar controls service as singleton for shared state across components
+builder.Services.AddSingleton<RadarControlsService>();
+builder.Services.AddControllers()
+    .AddJsonOptions(options => {
+        options.JsonSerializerOptions.NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.AllowNamedFloatingPointLiterals;
+    });
 
 // Register HttpClient for Blazor WebAssembly components during server-side rendering
 // This is needed because InteractiveWebAssembly components are initially rendered on the server

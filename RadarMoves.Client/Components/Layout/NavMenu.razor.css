@@ -1,0 +1,174 @@
+.navbar-horizontal {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background-color: #2c3e50;
+    color: white;
+    padding: 0.5rem 1rem;
+    height: 50px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    position: sticky;
+    top: 0;
+    z-index: 1000;
+    gap: 1rem;
+}
+
+.navbar-brand {
+    font-size: 1.2rem;
+    font-weight: bold;
+    white-space: nowrap;
+}
+
+.navbar-brand a {
+    color: white;
+    text-decoration: none;
+}
+
+.navbar-brand a:hover {
+    text-decoration: underline;
+}
+
+.navbar-content {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    flex: 1;
+    overflow-x: auto;
+    overflow-y: hidden;
+}
+
+.navbar-section {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    white-space: nowrap;
+}
+
+.controls-section {
+    margin-left: auto;
+    flex-wrap: wrap;
+}
+
+.navbar-control {
+    padding: 0.25rem 0.5rem;
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    border-radius: 4px;
+    background-color: #2c3e50;
+    color: white;
+    font-size: 0.875rem;
+    height: 32px;
+    min-width: 100px;
+}
+
+.navbar-control option {
+    background-color: #2c3e50;
+    color: white;
+    padding: 0.5rem;
+}
+
+.navbar-icon-link {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    border-radius: 4px;
+    color: white;
+    text-decoration: none;
+    transition: background-color 0.2s;
+    margin: 0 0.25rem;
+}
+
+.navbar-icon-link:hover {
+    background-color: rgba(255, 255, 255, 0.2);
+    color: white;
+}
+
+.navbar-icon-link.active {
+    background-color: rgba(255, 255, 255, 0.3);
+}
+
+.navbar-icon {
+    font-size: 1.2rem;
+    line-height: 1;
+}
+
+.navbar-dropdown:hover,
+.navbar-control:hover {
+    background-color: rgba(255, 255, 255, 0.2);
+}
+
+.navbar-dropdown:focus,
+.navbar-control:focus {
+    outline: none;
+    border-color: rgba(255, 255, 255, 0.5);
+    background-color: rgba(255, 255, 255, 0.15);
+}
+
+.navbar-control.small {
+    min-width: 80px;
+    width: 80px;
+}
+
+.navbar-control-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    min-width: 150px;
+}
+
+.navbar-label {
+    font-size: 0.75rem;
+    color: rgba(255, 255, 255, 0.9);
+    white-space: nowrap;
+}
+
+.navbar-slider {
+    width: 100%;
+    height: 4px;
+    border-radius: 2px;
+    background: rgba(255, 255, 255, 0.3);
+    outline: none;
+    -webkit-appearance: none;
+}
+
+.navbar-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: #4CAF50;
+    cursor: pointer;
+}
+
+.navbar-slider::-moz-range-thumb {
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: #4CAF50;
+    cursor: pointer;
+    border: none;
+}
+
+.navbar-slider:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* Make controls scrollable on small screens */
+@media (max-width: 768px) {
+    .navbar-content {
+        gap: 0.5rem;
+    }
+    
+    .navbar-control-group {
+        min-width: 120px;
+    }
+    
+    .navbar-control.small {
+        min-width: 60px;
+        width: 60px;
+    }
+}
+

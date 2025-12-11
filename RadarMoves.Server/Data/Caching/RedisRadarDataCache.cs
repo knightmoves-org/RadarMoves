@@ -8,20 +8,14 @@ namespace RadarMoves.Server.Data.Caching;
 /// Redis-backed implementation of IRadarDataCache
 /// Uses IConnectionMultiplexer for Redis operations
 /// </summary>
-public class RedisRadarDataCache : IRadarDataCache {
-    private readonly IDatabase _database;
-    private readonly ILogger<RedisRadarDataCache>? _logger;
-    private readonly TimeSpan _defaultTtl;
+public class RedisRadarDataCache(IConnectionMultiplexer multiplexer, ILogger<RedisRadarDataCache>? logger = null, TimeSpan? defaultTtl = null) : IRadarDataCache {
+    private readonly IDatabase _database = multiplexer.GetDatabase();
+    private readonly ILogger<RedisRadarDataCache>? _logger = logger;
+    private readonly TimeSpan _defaultTtl = defaultTtl ?? TimeSpan.FromHours(24);
 
     private const string ImageKeyPrefix = "radar:image:";
     private const string PVOLKeyPrefix = "radar:pvol:";
     private const string PVOLListKey = "radar:pvols:list";
-
-    public RedisRadarDataCache(IConnectionMultiplexer multiplexer, ILogger<RedisRadarDataCache>? logger = null, TimeSpan? defaultTtl = null) {
-        _database = multiplexer.GetDatabase();
-        _logger = logger;
-        _defaultTtl = defaultTtl ?? TimeSpan.FromHours(24);
-    }
 
     private static string GetImageKey(DateTime timestamp, double elevation, Channel channel) {
         return $"{ImageKeyPrefix}{timestamp:yyyyMMddHHmmss}:{elevation}:{channel}";
@@ -41,6 +35,7 @@ public class RedisRadarDataCache : IRadarDataCache {
         var key = GetImageKey(timestamp, elevation, channel);
         await _database.StringSetAsync(key, imageData, _defaultTtl);
     }
+
 
     public async Task<ProcessedPVOLMetadata?> GetProcessedPVOLAsync(DateTime timestamp, CancellationToken cancellationToken = default) {
         var key = GetPVOLKey(timestamp);

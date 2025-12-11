@@ -1,0 +1,108 @@
+@using Microsoft.AspNetCore.Components.Routing
+@using RadarMoves.Shared.Services
+@inject RadarControlsService ControlsService
+@inject NavigationManager NavigationManager
+@inject IServiceProvider ServiceProvider
+@inject ILogger<NavMenu> Logger
+@implements IDisposable
+@rendermode InteractiveWebAssembly
+
+<div class="navbar-horizontal">
+    <div class="navbar-brand">
+        <a href="/">RadarMoves</a>
+    </div>
+
+    <div class="navbar-content">
+        <!-- Navigation Icons -->
+        <div class="navbar-section">
+            <NavLink href="/state" class="navbar-icon-link" title="State Viewer">
+                <span class="navbar-icon">👥</span>
+            </NavLink>
+            <NavLink href="/debug" class="navbar-icon-link" title="Debug">
+                <span class="navbar-icon">🔧</span>
+            </NavLink>
+        </div>
+
+        <!-- Radar Controls -->
+        <div class="navbar-section controls-section">
+            <!-- View Type Selection (only on radar page) -->
+            @if (IsRadarViewerRoute())
+            {
+                <select class="navbar-control" value="@ControlsService.SelectedViewType"
+                    @onchange="@(async (ChangeEventArgs e) => { ControlsService.SelectedViewType = e.Value?.ToString() ?? "Radar"; ControlsService.NotifyStateChanged(); })">
+                    @foreach (var viewType in ControlsService.AvailableViewTypes)
+                    {
+                        <option value="@viewType">@viewType</option>
+                    }
+                </select>
+            }
+
+            <!-- Channel Selection -->
+            <select class="navbar-control" value="@ControlsService.SelectedChannel"
+                @onchange="@(async (ChangeEventArgs e) => { ControlsService.SelectedChannel = e.Value?.ToString() ?? "Reflectivity"; ControlsService.NotifyStateChanged(); })">
+                @foreach (var channel in ControlsService.AvailableChannels)
+                {
+                    <option value="@channel">@channel</option>
+                }
+            </select>
+
+            <!-- Time Display and Slider -->
+            <div class="navbar-control-group">
+                <label class="navbar-label">Time: @(ControlsService.Timestamps.Count > 0 ?
+                                        ControlsService.SelectedTime.ToString("HH:mm:ss") : "No data")</label>
+                <input type="range" class="navbar-slider" min="0"
+                    max="@(Math.Max(0, ControlsService.Timestamps.Count - 1))" step="1"
+                    value="@ControlsService.TimeIndex"
+                    @oninput="@(async (ChangeEventArgs e) => { if (int.TryParse(e.Value?.ToString(), out var idx) && idx >= 0 && idx < ControlsService.Timestamps.Count) { ControlsService.TimeIndex = idx; ControlsService.NotifyStateChanged(); } })"
+                    disabled="@(ControlsService.Timestamps.Count == 0)" />
+            </div>
+
+            <!-- Elevation Display and Slider -->
+            <div class="navbar-control-group">
+                <label class="navbar-label">Elevation: @(ControlsService.ElevationAngles.Count > 0 ?
+                                        ControlsService.SelectedElevation.ToString("F2") : "N/A")°</label>
+                <input type="range" class="navbar-slider" min="0"
+                    max="@(Math.Max(0, ControlsService.ElevationAngles.Count - 1))" step="1"
+                    value="@ControlsService.ElevationIndex"
+                    @oninput="@(async (ChangeEventArgs e) => { if (int.TryParse(e.Value?.ToString(), out var idx) && idx >= 0 && idx < ControlsService.ElevationAngles.Count) { ControlsService.ElevationIndex = idx; ControlsService.NotifyStateChanged(); } })"
+                    disabled="@(!ControlsService.ElevationAngles.Any())" />
+            </div>
+
+            <!-- Latitude/Longitude (only for radar viewer) -->
+            @if (IsRadarViewerRoute())
+            {
+                <input type="number" class="navbar-control small" placeholder="Lat" value="@ControlsService.Latitude"
+                    @oninput="@(async (ChangeEventArgs e) => { if (float.TryParse(e.Value?.ToString(), out var val)) { ControlsService.Latitude = val; ControlsService.NotifyStateChanged(); } })"
+                    step="0.0001" />
+                <input type="number" class="navbar-control small" placeholder="Lon" value="@ControlsService.Longitude"
+                    @oninput="@(async (ChangeEventArgs e) => { if (float.TryParse(e.Value?.ToString(), out var val)) { ControlsService.Longitude = val; ControlsService.NotifyStateChanged(); } })"
+                    step="0.0001" />
+            }
+        </div>
+    </div>
+</div>
+
+@code {
+    protected override void OnInitialized()
+    {
+        NavigationManager.LocationChanged += OnLocationChanged;
+        ControlsService.OnStateChanged += StateHasChanged;
+    }
+
+    private void OnLocationChanged(object? sender, LocationChangedEventArgs e)
+    {
+        InvokeAsync(StateHasChanged);
+    }
+
+    private bool IsRadarViewerRoute()
+    {
+        var uri = NavigationManager.Uri.Replace(NavigationManager.BaseUri, "").TrimStart('/');
+        return string.IsNullOrEmpty(uri) || uri == "/";
+    }
+
+    public void Dispose()
+    {
+        NavigationManager.LocationChanged -= OnLocationChanged;
+        ControlsService.OnStateChanged -= StateHasChanged;
+    }
+}

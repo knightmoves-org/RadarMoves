@@ -47,7 +47,7 @@ public interface IRadarDataCache {
 /// </summary>
 public class ProcessedPVOLMetadata {
     public DateTime Timestamp { get; set; }
-    public double[] Elevations { get; set; } = Array.Empty<double>();
+    public double[] Elevations { get; set; } = [];
     public DateTime ProcessedAt { get; set; }
 }
 

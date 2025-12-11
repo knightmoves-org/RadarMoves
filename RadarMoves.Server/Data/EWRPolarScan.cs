@@ -149,6 +149,7 @@ public sealed class EWRPolarScan : IDisposable, IRadarDataset<float> {
         public float LonRes => (LonMax - LonMin) / Width;
         public float LatRes => (LatMax - LatMin) / Height;
     }
+    public readonly record struct GeodeticCoordinates(double[,] latitude, double[,] longitude, double[,] height, (float latMin, float latMax, float lonMin, float lonMax) bounds);
 
 
     // ------------------------------------------------------------------------------------------------------------- //
@@ -165,7 +166,7 @@ public sealed class EWRPolarScan : IDisposable, IRadarDataset<float> {
     public readonly float A1GateDeg;
     public readonly float[] Azimuths;
     private readonly float[][,] _raw;
-    private (double[,] latitude, double[,] longitude, double[,] height, (float latMin, float latMax, float lonMin, float lonMax))? _cachedGeodetic;
+    private GeodeticCoordinates? _cachedGeodetic;
     public IEnumerable<Channel> Keys => Enum.GetValues<Channel>();
     public float[][,] Raw => _raw;
     public IEnumerable<float[,]> Values => _raw;
@@ -296,24 +297,25 @@ public sealed class EWRPolarScan : IDisposable, IRadarDataset<float> {
     /// </summary>
     private struct ThreadLocalMinMax {
         public float _latMin;
-        public float LatMax;
-        public float LonMin;
-        public float LonMax;
+        public float _latMax;
+        public float _lonMin;
+        public float _lonMax;
 
         public ThreadLocalMinMax() {
             _latMin = float.MaxValue;
-            LatMax = float.MinValue;
-            LonMin = float.MaxValue;
-            LonMax = float.MinValue;
+            _latMax = float.MinValue;
+            _lonMin = float.MaxValue;
+            _lonMax = float.MinValue;
         }
     }
+
 
     /// <summary>
     /// Compute geodetic coordinates (lat/lon/height) for each bin.
     /// Parallelized across rays. The result is cached on first call.
     /// </summary>
-    public (double[,] latitude, double[,] longitude, double[,] height, (float latMin, float latMax, float lonMin, float lonMax))
-      GetGeodeticCoordinates() {
+
+    public GeodeticCoordinates GetGeodeticCoordinates() {
         if (_cachedGeodetic.HasValue) return _cachedGeodetic.Value;
 
         double[] groundRange = GroundRange();
@@ -384,9 +386,9 @@ public sealed class EWRPolarScan : IDisposable, IRadarDataset<float> {
                     float latF = (float)latDeg;
                     float lonF = (float)lonDeg;
                     if (latF < local._latMin) local._latMin = latF;
-                    if (latF > local.LatMax) local.LatMax = latF;
-                    if (lonF < local.LonMin) local.LonMin = lonF;
-                    if (lonF > local.LonMax) local.LonMax = lonF;
+                    if (latF > local._latMax) local._latMax = latF;
+                    if (lonF < local._lonMin) local._lonMin = lonF;
+                    if (lonF > local._lonMax) local._lonMax = lonF;
                 }
 
                 return local;
@@ -395,14 +397,14 @@ public sealed class EWRPolarScan : IDisposable, IRadarDataset<float> {
             (local) => {
                 lock (lockObj) {
                     if (local._latMin < latMin) latMin = local._latMin;
-                    if (local.LatMax > latMax) latMax = local.LatMax;
-                    if (local.LonMin < lonMin) lonMin = local.LonMin;
-                    if (local.LonMax > lonMax) lonMax = local.LonMax;
+                    if (local._latMax > latMax) latMax = local._latMax;
+                    if (local._lonMin < lonMin) lonMin = local._lonMin;
+                    if (local._lonMax > lonMax) lonMax = local._lonMax;
                 }
             }
         );
 
-        _cachedGeodetic = (latitude, longitude, height, (latMin, latMax, lonMin, lonMax));
+        _cachedGeodetic = new GeodeticCoordinates(latitude, longitude, height, (latMin, latMax, lonMin, lonMax));
         return _cachedGeodetic.Value;
     }
 
@@ -579,7 +581,8 @@ public sealed class EWRPolarScan : IDisposable, IRadarDataset<float> {
         }
 
         // Get actual radar data bounds and calculate maximum ground range
-        var (_, _, _, (dataLatMin, dataLatMax, dataLonMin, dataLonMax)) = GetGeodeticCoordinates();
+        // var (_, _, _, (dataLatMin, dataLatMax, dataLonMin, dataLonMax)) = GetGeodeticCoordinates();
+        var (dataLatMin, dataLatMax, dataLonMin, dataLonMax) = GetGeodeticCoordinates().bounds;
         double[] groundRange = GroundRange();
         float maxGroundRange = (float)groundRange[groundRange.Length - 1]; // Maximum range in meters
         float maxGroundRangeKm = maxGroundRange / 1000f; // Convert to km for distance calculation
