@@ -1,7 +1,6 @@
 using Microsoft.AspNetCore.SignalR;
 using RadarMoves.Server.Data;
 using RadarMoves.Server.Data.Caching;
-using RadarMoves.Server.Data.Indexing;
 using RadarMoves.Server.Hubs;
 
 namespace RadarMoves.Server.Services;
@@ -10,8 +9,7 @@ namespace RadarMoves.Server.Services;
 /// Background service that processes PVOLs (Polar Volumes) and caches Geo images.
 /// Processes existing PVOLs on startup, watches for new files, and processes on-demand.
 /// </summary>
-public class PVOLProcessingService : BackgroundService
-{
+public class PVOLProcessingService : BackgroundService {
     private readonly IRadarDataProvider _dataProvider;
     private readonly IRadarDataCache _cache;
     private readonly IHubContext<RadarDataHub> _hubContext;
@@ -27,8 +25,7 @@ public class PVOLProcessingService : BackgroundService
         IRadarDataCache cache,
         IHubContext<RadarDataHub> hubContext,
         ILogger<PVOLProcessingService> logger,
-        IConfiguration configuration)
-    {
+        IConfiguration configuration) {
         _dataProvider = dataProvider;
         _cache = cache;
         _hubContext = hubContext;
@@ -37,14 +34,10 @@ public class PVOLProcessingService : BackgroundService
 
         // Get archive path from configuration
         var configPath = configuration["RadarData:Path"];
-        if (!string.IsNullOrEmpty(configPath))
-        {
-            if (Path.IsPathRooted(configPath))
-            {
+        if (!string.IsNullOrEmpty(configPath)) {
+            if (Path.IsPathRooted(configPath)) {
                 _archivePath = configPath;
-            }
-            else
-            {
+            } else {
                 var possibleBases = new[]
                 {
                     Directory.GetCurrentDirectory(),
@@ -53,13 +46,10 @@ public class PVOLProcessingService : BackgroundService
                     "/home/leaver/RadarMoves"
                 };
 
-                foreach (var baseDir in possibleBases)
-                {
-                    if (!string.IsNullOrEmpty(baseDir))
-                    {
+                foreach (var baseDir in possibleBases) {
+                    if (!string.IsNullOrEmpty(baseDir)) {
                         var testPath = Path.Combine(baseDir, configPath);
-                        if (Directory.Exists(testPath))
-                        {
+                        if (Directory.Exists(testPath)) {
                             _archivePath = testPath;
                             break;
                         }
@@ -68,9 +58,7 @@ public class PVOLProcessingService : BackgroundService
 
                 _archivePath ??= Path.Combine(Directory.GetCurrentDirectory(), configPath);
             }
-        }
-        else
-        {
+        } else {
             var possiblePaths = new[]
             {
                 Path.Combine(Directory.GetCurrentDirectory(), "data", "ewr", "samples"),
@@ -78,10 +66,8 @@ public class PVOLProcessingService : BackgroundService
                 "/home/leaver/RadarMoves/data/ewr/samples"
             };
 
-            foreach (var path in possiblePaths)
-            {
-                if (Directory.Exists(path))
-                {
+            foreach (var path in possiblePaths) {
+                if (Directory.Exists(path)) {
                     _archivePath = path;
                     break;
                 }
@@ -92,10 +78,8 @@ public class PVOLProcessingService : BackgroundService
 
         // Setup file watcher if enabled
         var watchDirectory = _configuration.GetValue<bool>("RadarData:Processing:WatchDirectory", true);
-        if (watchDirectory && Directory.Exists(_archivePath))
-        {
-            _fileWatcher = new FileSystemWatcher(_archivePath, "*.h5")
-            {
+        if (watchDirectory && Directory.Exists(_archivePath)) {
+            _fileWatcher = new FileSystemWatcher(_archivePath, "*.h5") {
                 NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite,
                 EnableRaisingEvents = false // Will be enabled in ExecuteAsync
             };
@@ -105,32 +89,27 @@ public class PVOLProcessingService : BackgroundService
         }
     }
 
-    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
-    {
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken) {
         _logger.LogInformation("PVOLProcessingService starting");
 
         // Process existing PVOLs on startup if enabled
         var processOnStartup = _configuration.GetValue<bool>("RadarData:Processing:ProcessOnStartup", true);
-        if (processOnStartup)
-        {
+        if (processOnStartup) {
             await ProcessAllExistingPVOLsAsync(stoppingToken);
         }
 
         // Enable file watcher if configured
-        if (_fileWatcher != null)
-        {
+        if (_fileWatcher != null) {
             _fileWatcher.EnableRaisingEvents = true;
             _logger.LogInformation("File watcher enabled for {Path}", _archivePath);
         }
 
         // Keep service running
-        while (!stoppingToken.IsCancellationRequested)
-        {
+        while (!stoppingToken.IsCancellationRequested) {
             await Task.Delay(TimeSpan.FromMinutes(1), stoppingToken);
         }
 
-        if (_fileWatcher != null)
-        {
+        if (_fileWatcher != null) {
             _fileWatcher.EnableRaisingEvents = false;
             _fileWatcher.Dispose();
         }
@@ -138,68 +117,50 @@ public class PVOLProcessingService : BackgroundService
         _logger.LogInformation("PVOLProcessingService stopping");
     }
 
-    private async Task ProcessAllExistingPVOLsAsync(CancellationToken cancellationToken)
-    {
+    private async Task ProcessAllExistingPVOLsAsync(CancellationToken cancellationToken) {
         _logger.LogInformation("Processing all existing PVOLs");
 
-        try
-        {
-            var series = await _dataProvider.GetSeries();
-            var pvols = series.Index
-                .Cast<(DateTime, float)>()
-                .GroupBy(idx => idx.Item1)
-                .ToList();
+        try {
+            var dataIndex = await _dataProvider.GetDataIndex();
+            var timestamps = dataIndex.Keys.ToList();
 
-            _logger.LogInformation("Found {Count} PVOLs to process", pvols.Count);
+            _logger.LogInformation("Found {Count} PVOLs to process", timestamps.Count);
 
-            foreach (var pvolGroup in pvols)
-            {
+            foreach (var timestamp in timestamps) {
                 if (cancellationToken.IsCancellationRequested) break;
-
-                var timestamp = pvolGroup.Key;
                 await ProcessPVOLAsync(timestamp, cancellationToken);
             }
-        }
-        catch (Exception ex)
-        {
+        } catch (Exception ex) {
             _logger.LogError(ex, "Error processing existing PVOLs");
         }
     }
 
-    private void OnFileCreated(object sender, FileSystemEventArgs e)
-    {
+    private void OnFileCreated(object sender, FileSystemEventArgs e) {
         _logger.LogInformation("New file created: {FilePath}", e.FullPath);
-        _ = Task.Run(async () =>
-        {
+        _ = Task.Run(async () => {
             // Wait a bit for file to be fully written
             await Task.Delay(TimeSpan.FromSeconds(2));
             await ProcessNewFileAsync(e.FullPath);
         });
     }
 
-    private void OnFileChanged(object sender, FileSystemEventArgs e)
-    {
+    private void OnFileChanged(object sender, FileSystemEventArgs e) {
         _logger.LogDebug("File changed: {FilePath}", e.FullPath);
         // File changed events can be noisy, so we mainly rely on Created events
     }
 
-    private async Task ProcessNewFileAsync(string filePath)
-    {
-        try
-        {
+    private async Task ProcessNewFileAsync(string filePath) {
+        try {
             // Extract timestamp from file
             using var scan = new EWRPolarScan(filePath);
             var timestamp = scan.Datetime;
 
             // Normalize to PVOL start time
             var pvolStartTime = await _dataProvider.GetPVOLStartTime(timestamp);
-            if (pvolStartTime.HasValue)
-            {
+            if (pvolStartTime.HasValue) {
                 await ProcessPVOLAsync(pvolStartTime.Value, CancellationToken.None);
             }
-        }
-        catch (Exception ex)
-        {
+        } catch (Exception ex) {
             _logger.LogError(ex, "Error processing new file {FilePath}", filePath);
         }
     }
@@ -207,14 +168,11 @@ public class PVOLProcessingService : BackgroundService
     /// <summary>
     /// Process a specific PVOL (process all elevation angles in ascending order)
     /// </summary>
-    public async Task ProcessPVOLAsync(DateTime pvolStartTime, CancellationToken cancellationToken)
-    {
+    public async Task ProcessPVOLAsync(DateTime pvolStartTime, CancellationToken cancellationToken) {
         await _processingSemaphore.WaitAsync(cancellationToken);
-        try
-        {
+        try {
             // Check if already processing
-            if (_processingPVOLs.Contains(pvolStartTime))
-            {
+            if (_processingPVOLs.Contains(pvolStartTime)) {
                 _logger.LogDebug("PVOL {Timestamp} is already being processed", pvolStartTime);
                 return;
             }
@@ -222,12 +180,10 @@ public class PVOLProcessingService : BackgroundService
             _processingPVOLs.Add(pvolStartTime);
             _logger.LogInformation("Processing PVOL {Timestamp}", pvolStartTime);
 
-            try
-            {
+            try {
                 // Get all elevations for this PVOL
                 var elevations = await _dataProvider.GetElevationAngles(pvolStartTime);
-                if (elevations == null || elevations.Count == 0)
-                {
+                if (elevations == null || elevations.Count == 0) {
                     _logger.LogWarning("No elevations found for PVOL {Timestamp}", pvolStartTime);
                     return;
                 }
@@ -235,31 +191,26 @@ public class PVOLProcessingService : BackgroundService
                 var processedElevations = new List<float>();
 
                 // Process each elevation angle in ascending order
-                foreach (var elevation in elevations.OrderBy(e => e))
-                {
+                foreach (var elevation in elevations.OrderBy(e => e)) {
                     if (cancellationToken.IsCancellationRequested) break;
 
                     _logger.LogInformation("Processing elevation {Elevation} for PVOL {Timestamp}", elevation, pvolStartTime);
 
                     // Process all channels for this elevation
-                    foreach (var channel in _dataProvider.GetAvailableChannels())
-                    {
+                    foreach (var channel in _dataProvider.GetAvailableChannels()) {
                         if (cancellationToken.IsCancellationRequested) break;
 
                         // Check if already cached
                         var hasImage = await _cache.HasImageAsync(pvolStartTime, elevation, channel, cancellationToken);
-                        if (hasImage)
-                        {
+                        if (hasImage) {
                             _logger.LogDebug("Image already cached for {Timestamp}, {Elevation}, {Channel}", pvolStartTime, elevation, channel);
                             continue;
                         }
 
                         // Generate and cache image
-                        try
-                        {
+                        try {
                             var imageBytes = await _dataProvider.GetImage(channel, pvolStartTime, elevation, 1024, 1024);
-                            if (imageBytes != null && imageBytes.Length > 0)
-                            {
+                            if (imageBytes != null && imageBytes.Length > 0) {
                                 await _cache.SetImageAsync(pvolStartTime, elevation, channel, imageBytes, cancellationToken);
                                 _logger.LogInformation("Cached image for {Timestamp}, {Elevation}, {Channel} ({Size} bytes)",
                                     pvolStartTime, elevation, channel, imageBytes.Length);
@@ -267,9 +218,7 @@ public class PVOLProcessingService : BackgroundService
                                 // Stream image to clients
                                 await _hubContext.Clients.All.SendAsync("ImageAvailable", pvolStartTime, elevation, channel.ToString(), imageBytes, cancellationToken);
                             }
-                        }
-                        catch (Exception ex)
-                        {
+                        } catch (Exception ex) {
                             _logger.LogError(ex, "Error generating image for {Timestamp}, {Elevation}, {Channel}",
                                 pvolStartTime, elevation, channel);
                         }
@@ -286,18 +235,12 @@ public class PVOLProcessingService : BackgroundService
 
                 _logger.LogInformation("Completed processing PVOL {Timestamp} with {Count} elevations",
                     pvolStartTime, processedElevations.Count);
-            }
-            finally
-            {
+            } finally {
                 _processingPVOLs.Remove(pvolStartTime);
             }
-        }
-        catch (Exception ex)
-        {
+        } catch (Exception ex) {
             _logger.LogError(ex, "Error processing PVOL {Timestamp}", pvolStartTime);
-        }
-        finally
-        {
+        } finally {
             _processingSemaphore.Release();
         }
     }

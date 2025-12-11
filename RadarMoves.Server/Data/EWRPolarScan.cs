@@ -49,6 +49,68 @@ public static class IH5GroupExtensions {
             return (U)Convert.ChangeType(attr.Read<T>(), typeof(U));
         }
     }
+
+    /// <summary>
+    /// Reads an attribute as an integer, using the actual HDF5 data type to determine how to read it
+    /// </summary>
+    public static int GetAttributeAsInt(this IH5Object obj, string name, int defaultValue = 0) {
+        var attr = obj.Attribute(name);
+        if (attr == null) return defaultValue;
+
+        var dataType = attr.Type;
+        var typeClass = dataType.Class;
+
+        try {
+            // Handle fixed-point (integer) types
+            if (typeClass == H5DataTypeClass.FixedPoint && dataType.FixedPoint != null) {
+                var fixedPoint = dataType.FixedPoint;
+                var size = dataType.Size;
+                var isSigned = fixedPoint.IsSigned;
+
+                // Read based on size and signedness
+                if (size == 1) {
+                    if (isSigned) {
+                        return (int)attr.Read<sbyte>();
+                    } else {
+                        return (int)attr.Read<byte>();
+                    }
+                } else if (size == 2) {
+                    if (isSigned) {
+                        return (int)attr.Read<short>();
+                    } else {
+                        return (int)attr.Read<ushort>();
+                    }
+                } else if (size == 4) {
+                    if (isSigned) {
+                        return attr.Read<int>();
+                    } else {
+                        return (int)attr.Read<uint>();
+                    }
+                } else if (size == 8) {
+                    if (isSigned) {
+                        return (int)attr.Read<long>();
+                    } else {
+                        return (int)attr.Read<ulong>();
+                    }
+                }
+            }
+            // Handle floating-point types
+            else if (typeClass == H5DataTypeClass.FloatingPoint && dataType.FloatingPoint != null) {
+                var size = dataType.Size;
+                if (size == 4) {
+                    return (int)attr.Read<float>();
+                } else if (size == 8) {
+                    return (int)attr.Read<double>();
+                }
+            }
+
+            // Fallback: try reading as int directly
+            return attr.Read<int>();
+        } catch {
+            // If all else fails, return default
+            return defaultValue;
+        }
+    }
 }
 
 
@@ -92,14 +154,14 @@ public sealed class EWRPolarScan : IDisposable, IRadarDataset<float> {
     // ------------------------------------------------------------------------------------------------------------- //
     private readonly NativeFile _file;
     public readonly DateTime Datetime;
-    public readonly float Height;
-    public readonly float Latitude;
-    public readonly float Longitude;
+    public readonly double Height;
+    public readonly double Latitude;
+    public readonly double Longitude;
     public readonly int NRays;
     public readonly int NBins;
-    public readonly float ElevationAngle;
-    public readonly float RScale;
-    public readonly float RStart;
+    public readonly double ElevationAngle;
+    public readonly double RScale;
+    public readonly double RStart;
     public readonly float A1GateDeg;
     public readonly float[] Azimuths;
     private readonly float[][,] _raw;
@@ -132,9 +194,9 @@ public sealed class EWRPolarScan : IDisposable, IRadarDataset<float> {
         IH5Group where, what, how, root;
 
         where = file.Group("where");
-        Latitude = where.GetAttribute<double, float>("lat");
-        Longitude = where.GetAttribute<double, float>("lon");
-        Height = where.GetAttribute<double, float>("height");
+        Latitude = where.GetAttribute<double>("lat");
+        Longitude = where.GetAttribute<double>("lon");
+        Height = where.GetAttribute<double>("height");
 
         what = file.Group("what");
         string date = what.GetAttribute<string>("date");
@@ -143,11 +205,14 @@ public sealed class EWRPolarScan : IDisposable, IRadarDataset<float> {
 
         root = file.Group("dataset1");
         where = root.Group("where");
-        NRays = where.GetAttribute<double, int>("nrays");
-        NBins = where.GetAttribute<double, int>("nbins");
-        ElevationAngle = where.GetAttribute<double, float>("elangle");
-        RScale = where.GetAttribute<double, float>("rscale");
-        RStart = where.GetAttribute<double, float>("rstart");
+
+        // Read nrays and nbins using the actual HDF5 data type
+        NRays = where.GetAttributeAsInt("nrays");
+        NBins = where.GetAttributeAsInt("nbins");
+
+        ElevationAngle = where.GetAttribute<double>("elangle");
+        RScale = where.GetAttribute<double>("rscale");
+        RStart = where.GetAttribute<double>("rstart");
 
         how = root.Group("how");
         double[] startAz = how.GetAttribute<double[]>("startazA");
@@ -156,24 +221,6 @@ public sealed class EWRPolarScan : IDisposable, IRadarDataset<float> {
         string[] keys = ["data1", "data2", "data3", "data4"];
 
         _raw = new float[keys.Length][,];
-
-        // // Try to read dimensions from the actual dataset if attributes are 0
-        // bool dimensionsFromData = false;
-        // if (NRays == 0 || NBins == 0) {
-        //     // Try to get dimensions from the first data dataset
-        //     try {
-        //         var firstDataGroup = root.Group(keys[0]);
-        //         var firstDataset = firstDataGroup.Dataset("data");
-        //         var dims = firstDataset.Space.Dimensions;
-        //         if (dims.Length >= 2) {
-        //             NRays = (int)dims[0];
-        //             NBins = (int)dims[1];
-        //             dimensionsFromData = true;
-        //         }
-        //     } catch {
-        //         // If we can't read from dataset, keep the attribute values (which are 0)
-        //     }
-        // }
 
         // calculate azimuth from start and stop azimuth angles
         if (NRays > 0 && startAz != null && stopAz != null && startAz.Length == NRays && stopAz.Length == NRays) {
@@ -190,22 +237,17 @@ public sealed class EWRPolarScan : IDisposable, IRadarDataset<float> {
             what = g.Group("what");
             float gain = what.GetAttribute<double, float>("gain");
             float offset = what.GetAttribute<double, float>("offset");
-            _raw[k] = g.Dataset("data").Read<float[,]>();
+            var src = g.Dataset("data").Read<float[,]>();
             if (gain != 1.0f || offset != 0.0f) {
 
                 for (int i = 0; i < NRays; i++)
                     for (int j = 0; j < NBins; j++) {
-                        _raw[k][i, j] *= gain;
-                        _raw[k][i, j] += offset;
+                        _raw[k][i, j] = src[i, j] * gain + offset;
                     }
-                //     // Allocate the array before writing to it
-                //     _raw[k] = new float[NRays, NBins];
-                // } else {
-                //     _raw[k] = src;
-                // }
-
-
+            } else {
+                _raw[k] = src;
             }
+
         }
         _cachedGeodetic = null;
     }
@@ -384,8 +426,8 @@ public sealed class EWRPolarScan : IDisposable, IRadarDataset<float> {
         if (gs.Equals(default(GridSpec))) {
             float span = 300_000.0f / 111_000.0f; // ~300km -> degrees approx (coarse)
             gs = new GridSpec(
-                Longitude - span, Longitude + span,
-                Latitude - span, Latitude + span, 1500, 1500);
+                (float)(Longitude - span), (float)(Longitude + span),
+                (float)(Latitude - span), (float)(Latitude + span), 1500, 1500);
         }
 
 
@@ -400,8 +442,8 @@ public sealed class EWRPolarScan : IDisposable, IRadarDataset<float> {
         float latRes = gs.LatRes;
 
         // Earth constants
-        float cosEl = MathF.Cos(Deg2Rad(ElevationAngle));
-        float cosLat = MathF.Cos(Deg2Rad(Latitude));
+        float cosEl = MathF.Cos(Deg2Rad((float)ElevationAngle));
+        float cosLat = MathF.Cos(Deg2Rad((float)Latitude));
         float invR = Rad2Deg(1.0f / (float)Re43);
         float lambda = Rad2Deg(1.0f / ((float)Re43 * cosLat));
 
@@ -436,7 +478,7 @@ public sealed class EWRPolarScan : IDisposable, IRadarDataset<float> {
                     float value = radarData[i, j];
 
                     // Always calculate range and coordinates, even for nodata Calculate range
-                    float r = RStart + j * RScale;
+                    float r = (float)(RStart + j * RScale);
 
                     // Ground range approximate (cos(el)*r)
                     float g = cosEl * r;
@@ -446,8 +488,8 @@ public sealed class EWRPolarScan : IDisposable, IRadarDataset<float> {
                     float x = g * sinAz;
 
                     // Convert to lat/lon degrees
-                    float lat = Latitude + y * invR;
-                    float lon = Longitude + x * lambda;
+                    float lat = (float)Latitude + y * invR;
+                    float lon = (float)Longitude + x * lambda;
 
                     // Map lat/lon into grid indices using inverse distance weighting
                     // Use a 3x3 kernel to fill gaps between radar rays at higher resolutions

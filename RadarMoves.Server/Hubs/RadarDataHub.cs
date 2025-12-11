@@ -1,7 +1,6 @@
 using Microsoft.AspNetCore.SignalR;
 using RadarMoves.Server.Data;
 using RadarMoves.Server.Data.Caching;
-using RadarMoves.Server.Data.Indexing;
 using RadarMoves.Server.Services;
 
 namespace RadarMoves.Server.Hubs;
@@ -94,31 +93,39 @@ public class RadarDataHub(
     }
 
     /// <summary>
-    /// Get MultiIndex data structure
+    /// Get data index structure
     /// </summary>
     public async Task<object?> GetMultiIndex() {
         try {
-            var multiIndex = await _dataProvider.GetMultiIndex();
-            var indexList = multiIndex.Cast<(DateTime, float)>().ToList();
+            var dataIndex = await _dataProvider.GetDataIndex();
+
+            // Flatten for entries list
+            var entries = new List<object>();
+            foreach (var (timestamp, (angles, filePaths)) in dataIndex) {
+                for (int i = 0; i < angles.Length; i++) {
+                    entries.Add(new {
+                        timestamp = timestamp.ToString("yyyy-MM-dd HH:mm:ss"),
+                        elevation = angles[i],
+                        filePath = filePaths[i]
+                    });
+                }
+            }
 
             return new {
-                count = indexList.Count,
-                entries = indexList.Select(idx => new {
-                    timestamp = idx.Item1.ToString("yyyy-MM-dd HH:mm:ss"),
-                    elevation = idx.Item2
-                }).ToList(),
-                groupedByTime = indexList
-                    .GroupBy(idx => idx.Item1)
-                    .Select(g => new {
-                        timestamp = g.Key.ToString("yyyy-MM-dd HH:mm:ss"),
-                        elevations = g.Select(idx => idx.Item2).OrderBy(e => e).ToArray(),
-                        count = g.Count()
+                count = entries.Count,
+                entries = entries,
+                groupedByTime = dataIndex
+                    .Select(kvp => new {
+                        timestamp = kvp.Key.ToString("yyyy-MM-dd HH:mm:ss"),
+                        elevations = kvp.Value.Angles,
+                        filePaths = kvp.Value.FilePaths,
+                        count = kvp.Value.Angles.Length
                     })
                     .OrderBy(g => g.timestamp)
                     .ToList()
             };
         } catch (Exception ex) {
-            _logger.LogError(ex, "Error getting MultiIndex");
+            _logger.LogError(ex, "Error getting data index");
             return null;
         }
     }

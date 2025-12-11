@@ -141,7 +141,9 @@ public sealed class EWRDataset : IDisposable {
     /// </summary>
     public IReadOnlyList<float>? GetElevationAngles(DateTime timestamp) {
         var volume = GetVolume(timestamp);
-        return volume?.ElevationAngles;
+        if (volume?.ElevationAngles == null) return null;
+        // Convert double to float for interface compatibility
+        return volume.ElevationAngles.Select(e => (float)e).ToList().AsReadOnly();
     }
 
     /// <summary>
@@ -533,13 +535,13 @@ public sealed class EWRDataset : IDisposable {
 /// </summary>
 public class ScanMetadata {
     public DateTime Timestamp { get; set; }
-    public float ElevationAngle { get; set; }
+    public double ElevationAngle { get; set; }
     public int NRays { get; set; }
     public int NBins { get; set; }
-    public float Latitude { get; set; }
-    public float Longitude { get; set; }
-    public float Height { get; set; }
-    public float RScale { get; set; }
-    public float RStart { get; set; }
+    public double Latitude { get; set; }
+    public double Longitude { get; set; }
+    public double Height { get; set; }
+    public double RScale { get; set; }
+    public double RStart { get; set; }
 }
 

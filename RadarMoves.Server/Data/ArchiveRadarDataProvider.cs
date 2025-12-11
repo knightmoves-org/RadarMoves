@@ -1,6 +1,5 @@
 using System.Collections.Concurrent;
 using System.Globalization;
-using RadarMoves.Server.Data.Indexing;
 using PureHDF;
 using PureHDF.VOL.Native;
 
@@ -13,15 +12,12 @@ public class ArchiveRadarDataProvider : IRadarDataProvider {
     private readonly string _archivePath;
     private readonly ILogger<ArchiveRadarDataProvider> _logger;
     private readonly ConcurrentDictionary<DateTime, List<string>> _filesByTimestamp = new();
-    private readonly Lazy<Task<List<DateTime>>> _timestamps;
-    private readonly Lazy<Task<Series<(DateTime, float), string>>> _series;
-    private readonly ConcurrentDictionary<(DateTime, float), string> _indexToFile = new();
+    private readonly Lazy<Task<Dictionary<DateTime, (double[] Angles, string[] FilePaths)>>> _dataIndex;
 
     public ArchiveRadarDataProvider(string archivePath, ILogger<ArchiveRadarDataProvider> logger) {
         _archivePath = archivePath ?? throw new ArgumentNullException(nameof(archivePath));
         _logger = logger;
-        _timestamps = new Lazy<Task<List<DateTime>>>(LoadTimestamps);
-        _series = new Lazy<Task<Series<(DateTime, float), string>>>(LoadSeries);
+        _dataIndex = new Lazy<Task<Dictionary<DateTime, (double[] Angles, string[] FilePaths)>>>(LoadDataIndex);
     }
     private static string? GetArchivePath(string? configPath) {
         string? archivePath = null;
@@ -38,13 +34,15 @@ public class ArchiveRadarDataProvider : IRadarDataProvider {
     public ArchiveRadarDataProvider(IConfiguration configuration, ILogger<ArchiveRadarDataProvider> logger) {
         _archivePath = GetArchivePath(configuration["RadarData:Path"]) ?? throw new ArgumentNullException(nameof(configuration));
         _logger = logger;
-        _timestamps = new Lazy<Task<List<DateTime>>>(LoadTimestamps);
-        _series = new Lazy<Task<Series<(DateTime, float), string>>>(LoadSeries);
+        _dataIndex = new Lazy<Task<Dictionary<DateTime, (double[] Angles, string[] FilePaths)>>>(LoadDataIndex);
     }
 
     public IEnumerable<Channel> GetAvailableChannels() => Enum.GetValues<Channel>();
 
-    public async Task<IEnumerable<DateTime>> GetTimestamps() => (await _series.Value).Keys.Select(k => k.Item1);
+    public async Task<IEnumerable<DateTime>> GetTimestamps() {
+        var index = await _dataIndex.Value;
+        return index.Keys;
+    }
 
 
 
@@ -74,7 +72,7 @@ public class ArchiveRadarDataProvider : IRadarDataProvider {
                     filePath, scan.ElevationAngle, scan.NRays, scan.NBins);
 
                 // Include all scans, even if they have zero dimensions (might be valid but empty)
-                elevations.Add(scan.ElevationAngle);
+                elevations.Add((float)scan.ElevationAngle);
                 _logger.LogDebug("Added elevation {Elevation} from {FilePath}", scan.ElevationAngle, filePath);
             } catch (Exception ex) {
                 _logger.LogError(ex, "Failed to read elevation from {FilePath}: {Error}", filePath, ex.Message);
@@ -291,7 +289,7 @@ public class ArchiveRadarDataProvider : IRadarDataProvider {
                     // Create image writer and get PNG bytes
                     var imageWriter = new ImageWriter(raster);
                     var imageBytes = imageWriter.GetPNGBytes(channel, includeColorBar: true,
-                        radarLat: scan.Latitude, radarLon: scan.Longitude, gridSpec: gridSpec);
+                        radarLat: (float)scan.Latitude, radarLon: (float)scan.Longitude, gridSpec: gridSpec);
 
                     _logger.LogInformation("Image generated: {Size} bytes", imageBytes.Length);
                     return imageBytes;
@@ -329,7 +327,7 @@ public class ArchiveRadarDataProvider : IRadarDataProvider {
                     // Create image writer and get PNG bytes
                     var imageWriter = new ImageWriter(raster);
                     var imageBytes = imageWriter.GetPNGBytes(channel, includeColorBar: true,
-                        radarLat: scan.Latitude, radarLon: scan.Longitude, gridSpec: gridSpec);
+                        radarLat: (float)scan.Latitude, radarLon: (float)scan.Longitude, gridSpec: gridSpec);
 
                     _logger.LogInformation("Image generated: {Size} bytes", imageBytes.Length);
                     return imageBytes;
@@ -344,16 +342,14 @@ public class ArchiveRadarDataProvider : IRadarDataProvider {
         return null;
     }
 
-    public async Task<MultiIndex<(DateTime, float)>> GetMultiIndex() {
-        var series = await _series.Value;
-        return series.Index;
-    }
-
-    public async Task<Series<(DateTime, float), string>> GetSeries() {
-        return await _series.Value;
+    public async Task<Dictionary<DateTime, (double[] Angles, string[] FilePaths)>> GetDataIndex() {
+        return await _dataIndex.Value;
     }
 
     public async Task<DateTime?> GetPVOLStartTime(DateTime timestamp) {
+        // Ensure data index is loaded
+        await _dataIndex.Value;
+
         // Find the PVOL start time (lowest elevation angle for this timestamp)
         // Within 1 second tolerance
         var matchingKey = _filesByTimestamp.Keys.FirstOrDefault(k => Math.Abs((k - timestamp).TotalSeconds) < 1.0);
@@ -363,49 +359,13 @@ public class ArchiveRadarDataProvider : IRadarDataProvider {
         return null;
     }
 
-    private async Task<Series<(DateTime, float), string>> LoadSeries() {
-        return await Task.Run(() => {
-            // Ensure timestamps are loaded first
-            _timestamps.Value.Wait();
-
-            var indexList = new List<(DateTime, float)>();
-            var filePaths = new List<string>();
-
-            foreach (var (timestamp, files) in _filesByTimestamp) {
-                foreach (var filePath in files) {
-                    try {
-                        using var scan = new EWRPolarScan(filePath);
-                        var item = (timestamp, scan.ElevationAngle);
-                        indexList.Add(item);
-                        filePaths.Add(filePath);
-                        _indexToFile[item] = filePath;
-                    } catch (Exception ex) {
-                        _logger.LogError(ex, "Failed to read elevation from {FilePath} for series", filePath);
-                    }
-                }
-            }
-
-            // Sort by timestamp then elevation
-            var sortedPairs = indexList.Zip(filePaths)
-                .OrderBy(p => p.First.Item1)  // Sort by DateTime (timestamp)
-                .ThenBy(p => p.First.Item2)   // Then by float (elevation)
-                .ToList();
-
-            var sortedIndex = sortedPairs.Select(p => p.First).ToList();
-            var sortedPaths = sortedPairs.Select(p => p.Second).ToList();
-
-            _logger.LogInformation("Loaded series with {Count} entries", sortedIndex.Count);
-            return new Series<(DateTime, float), string>(sortedPaths, sortedIndex);
-        });
-    }
-
-    private async Task<List<DateTime>> LoadTimestamps() {
+    private async Task<Dictionary<DateTime, (double[] Angles, string[] FilePaths)>> LoadDataIndex() {
         return await Task.Run(() => {
             if (!Directory.Exists(_archivePath)) {
                 _logger.LogError("Archive directory not found: {ArchivePath}", _archivePath);
                 _logger.LogError("Current working directory: {CurrentDir}", Directory.GetCurrentDirectory());
                 _logger.LogError("Trying absolute path: {AbsolutePath}", Path.GetFullPath(_archivePath));
-                return [];
+                return new Dictionary<DateTime, (double[] Angles, string[] FilePaths)>();
             }
 
             var h5Files = Directory.GetFiles(_archivePath, "*.h5", SearchOption.TopDirectoryOnly);
@@ -413,37 +373,78 @@ public class ArchiveRadarDataProvider : IRadarDataProvider {
 
             if (h5Files.Length == 0) {
                 _logger.LogWarning("No H5 files found in directory: {ArchivePath}", _archivePath);
-                return [];
+                return new Dictionary<DateTime, (double[] Angles, string[] FilePaths)>();
             }
 
-            var timestamps = new HashSet<DateTime>();
+            // Group files by timestamp
+            var filesByTimestamp = new Dictionary<DateTime, List<(double elevation, string filePath)>>();
             int successCount = 0;
             int failCount = 0;
 
             foreach (var filePath in h5Files) {
                 var timestamp = ExtractTimestampFromFile(filePath);
                 if (timestamp.HasValue) {
-                    timestamps.Add(timestamp.Value);
-                    if (!_filesByTimestamp.ContainsKey(timestamp.Value)) {
-                        _filesByTimestamp[timestamp.Value] = [];
+                    try {
+                        using var scan = new EWRPolarScan(filePath);
+
+                        // Skip files with invalid dimensions (empty/corrupted scans)
+                        if (scan.NRays == 0 || scan.NBins == 0) {
+                            _logger.LogWarning("Skipping file with invalid dimensions: {FilePath} (NRays={NRays}, NBins={NBins})",
+                                filePath, scan.NRays, scan.NBins);
+                            failCount++;
+                            continue;
+                        }
+
+                        // Convert float elevation to double for precise matching
+                        var elevationDouble = (double)scan.ElevationAngle;
+
+                        if (!filesByTimestamp.ContainsKey(timestamp.Value)) {
+                            filesByTimestamp[timestamp.Value] = new List<(double, string)>();
+                        }
+
+                        filesByTimestamp[timestamp.Value].Add((elevationDouble, filePath));
+                        successCount++;
+                    } catch (Exception ex) {
+                        _logger.LogError(ex, "Failed to read elevation from {FilePath} for data index", filePath);
+                        failCount++;
                     }
-                    _filesByTimestamp[timestamp.Value].Add(filePath);
-                    successCount++;
                 } else {
                     failCount++;
                     _logger.LogDebug("Failed to extract timestamp from file: {FilePath}", filePath);
                 }
             }
 
-            _logger.LogInformation("Loaded {Count} unique timestamps from {ArchivePath} (success: {Success}, failed: {Failed})",
-                timestamps.Count, _archivePath, successCount, failCount);
-            return timestamps.OrderBy(t => t).ToList();
+            // Build the final dictionary structure
+            var dataIndex = new Dictionary<DateTime, (double[] Angles, string[] FilePaths)>();
+            foreach (var (timestamp, entries) in filesByTimestamp) {
+                // Sort by elevation angle
+                var sortedEntries = entries.OrderBy(e => e.elevation).ToList();
+                var angles = sortedEntries.Select(e => e.elevation).ToArray();
+                var filePaths = sortedEntries.Select(e => e.filePath).ToArray();
+                dataIndex[timestamp] = (angles, filePaths);
+            }
+
+            // Also populate _filesByTimestamp for backward compatibility
+            foreach (var (timestamp, entries) in filesByTimestamp) {
+                if (!_filesByTimestamp.ContainsKey(timestamp)) {
+                    _filesByTimestamp[timestamp] = new List<string>();
+                }
+                foreach (var (_, filePath) in entries) {
+                    if (!_filesByTimestamp[timestamp].Contains(filePath)) {
+                        _filesByTimestamp[timestamp].Add(filePath);
+                    }
+                }
+            }
+
+            _logger.LogInformation("Loaded data index with {Count} timestamps (success: {Success}, failed: {Failed})",
+                dataIndex.Count, successCount, failCount);
+            return dataIndex;
         });
     }
 
     private async Task<List<string>?> GetFilesForTimestamp(DateTime timestamp) {
-        // Ensure timestamps are loaded
-        await _timestamps.Value;
+        // Ensure data index is loaded (which populates _filesByTimestamp)
+        await _dataIndex.Value;
 
         if (_filesByTimestamp.TryGetValue(timestamp, out var files)) {
             return files;

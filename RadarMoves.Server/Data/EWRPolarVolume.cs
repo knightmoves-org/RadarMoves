@@ -9,7 +9,7 @@ namespace RadarMoves.Server.Data;
 /// </summary>
 public sealed class EWRPolarVolume : IDisposable {
     private readonly List<EWRPolarScan> _scans;
-    private readonly Dictionary<float, EWRPolarScan> _elevationIndex;
+    private readonly Dictionary<double, EWRPolarScan> _elevationIndex;
     private bool _disposed = false;
 
     /// <summary>
@@ -25,12 +25,12 @@ public sealed class EWRPolarVolume : IDisposable {
     /// <summary>
     /// Radar location (assumed consistent across all scans)
     /// </summary>
-    public (float Latitude, float Longitude, float Height) Location { get; }
+    public (double Latitude, double Longitude, double Height) Location { get; }
 
     /// <summary>
     /// All elevation angles in this volume, sorted
     /// </summary>
-    public IReadOnlyList<float> ElevationAngles { get; }
+    public IReadOnlyList<double> ElevationAngles { get; }
 
     /// <summary>
     /// Number of elevation angles in this volume
@@ -40,7 +40,7 @@ public sealed class EWRPolarVolume : IDisposable {
     /// <summary>
     /// Get a scan by elevation angle
     /// </summary>
-    public EWRPolarScan? GetScanByElevation(float elevationAngle) {
+    public EWRPolarScan? GetScanByElevation(double elevationAngle) {
         return _elevationIndex.TryGetValue(elevationAngle, out var scan) ? scan : null;
     }
 
@@ -52,7 +52,7 @@ public sealed class EWRPolarVolume : IDisposable {
     /// <summary>
     /// Get a scan by elevation angle
     /// </summary>
-    public EWRPolarScan? this[float elevationAngle] => GetScanByElevation(elevationAngle);
+    public EWRPolarScan? this[double elevationAngle] => GetScanByElevation(elevationAngle);
 
     /// <summary>
     /// Create a PolarVolume from multiple file paths (one per elevation angle)
@@ -92,7 +92,7 @@ public sealed class EWRPolarVolume : IDisposable {
     /// </summary>
     public EWRPolarVolume(IEnumerable<EWRPolarScan> scans) {
         _scans = [.. scans];
-        _elevationIndex = new Dictionary<float, EWRPolarScan>();
+        _elevationIndex = new Dictionary<double, EWRPolarScan>();
 
         foreach (var scan in _scans) {
             _elevationIndex[scan.ElevationAngle] = scan;

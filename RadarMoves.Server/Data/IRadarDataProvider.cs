@@ -1,5 +1,4 @@
 using RadarMoves.Server.Data;
-using RadarMoves.Server.Data.Indexing;
 
 namespace RadarMoves.Server.Data;
 
@@ -55,14 +54,9 @@ public interface IRadarDataProvider {
     Task<byte[]?> GetImage(Channel channel, DateTime timestamp, float elevationAngle, int width = 1024, int height = 1024);
 
     /// <summary>
-    /// Get MultiIndex of all available data (timestamp, elevation)
+    /// Get dictionary mapping timestamps to elevation angles and file paths
     /// </summary>
-    Task<MultiIndex<(DateTime, float)>> GetMultiIndex();
-
-    /// <summary>
-    /// Get Series mapping MultiIndex to file paths
-    /// </summary>
-    Task<Series<(DateTime, float), string>> GetSeries();
+    Task<Dictionary<DateTime, (double[] Angles, string[] FilePaths)>> GetDataIndex();
 
     /// <summary>
     /// Get the PVOL start time for a given timestamp (normalizes to PVOL start time)
