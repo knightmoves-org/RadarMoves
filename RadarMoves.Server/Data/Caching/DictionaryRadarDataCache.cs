@@ -11,17 +11,17 @@ public class DictionaryRadarDataCache : IRadarDataCache {
     private readonly ConcurrentDictionary<string, byte[]> _imageCache = new();
     private readonly ConcurrentDictionary<DateTime, ProcessedPVOLMetadata> _pvolCache = new();
 
-    private static string GetImageKey(DateTime timestamp, float elevation, Channel channel) {
+    private static string GetImageKey(DateTime timestamp, double elevation, Channel channel) {
         return $"image:{timestamp:yyyyMMddHHmmss}:{elevation}:{channel}";
     }
 
-    public Task<byte[]?> GetImageAsync(DateTime timestamp, float elevation, Channel channel, CancellationToken cancellationToken = default) {
+    public Task<byte[]?> GetImageAsync(DateTime timestamp, double elevation, Channel channel, CancellationToken cancellationToken = default) {
         var key = GetImageKey(timestamp, elevation, channel);
         _imageCache.TryGetValue(key, out var image);
         return Task.FromResult<byte[]?>(image);
     }
 
-    public Task SetImageAsync(DateTime timestamp, float elevation, Channel channel, byte[] imageData, CancellationToken cancellationToken = default) {
+    public Task SetImageAsync(DateTime timestamp, double elevation, Channel channel, byte[] imageData, CancellationToken cancellationToken = default) {
         var key = GetImageKey(timestamp, elevation, channel);
         _imageCache[key] = imageData;
         return Task.CompletedTask;
@@ -32,7 +32,7 @@ public class DictionaryRadarDataCache : IRadarDataCache {
         return Task.FromResult(metadata);
     }
 
-    public Task SetProcessedPVOLAsync(DateTime timestamp, float[] elevations, CancellationToken cancellationToken = default) {
+    public Task SetProcessedPVOLAsync(DateTime timestamp, double[] elevations, CancellationToken cancellationToken = default) {
         var metadata = new ProcessedPVOLMetadata {
             Timestamp = timestamp,
             Elevations = elevations,
@@ -46,7 +46,7 @@ public class DictionaryRadarDataCache : IRadarDataCache {
         return Task.FromResult<IEnumerable<DateTime>>(_pvolCache.Keys.OrderBy(t => t).ToList());
     }
 
-    public Task<bool> HasImageAsync(DateTime timestamp, float elevation, Channel channel, CancellationToken cancellationToken = default) {
+    public Task<bool> HasImageAsync(DateTime timestamp, double elevation, Channel channel, CancellationToken cancellationToken = default) {
         var key = GetImageKey(timestamp, elevation, channel);
         return Task.FromResult(_imageCache.ContainsKey(key));
     }

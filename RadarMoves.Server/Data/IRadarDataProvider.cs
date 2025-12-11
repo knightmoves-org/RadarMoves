@@ -19,7 +19,7 @@ public interface IRadarDataProvider {
     /// <summary>
     /// Get elevation angles for a specific timestamp
     /// </summary>
-    Task<IReadOnlyList<float>?> GetElevationAngles(DateTime timestamp);
+    Task<IReadOnlyList<double>?> GetElevationAngles(DateTime timestamp);
 
     /// <summary>
     /// Get scan metadata for a specific timestamp and elevation

@@ -86,8 +86,8 @@ public class DatasetTests {
 
         int height = 256;
         int width = 256;
-        float radarLat = ds.Latitude;
-        float radarLon = ds.Longitude;
+        float radarLat = (float)ds.Latitude;
+        float radarLon = (float)ds.Longitude;
         float latMin = (float)(radarLat - 2.0);
         float latMax = (float)(radarLat + 2.0);
         float lonMin = (float)(radarLon - 2.0);

@@ -62,7 +62,7 @@ public class RadarDataHub(
                 return null;
             }
 
-            var image = await _cache.GetImageAsync(timestamp, elevation, channelEnum);
+            var image = await _cache.GetImageAsync(timestamp, (double)elevation, channelEnum);
             return image;
         } catch (Exception ex) {
             _logger.LogError(ex, "Error getting cached image for {Timestamp}, {Elevation}, {Channel}",

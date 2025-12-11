@@ -23,7 +23,7 @@ public class RedisRadarDataCache : IRadarDataCache {
         _defaultTtl = defaultTtl ?? TimeSpan.FromHours(24);
     }
 
-    private static string GetImageKey(DateTime timestamp, float elevation, Channel channel) {
+    private static string GetImageKey(DateTime timestamp, double elevation, Channel channel) {
         return $"{ImageKeyPrefix}{timestamp:yyyyMMddHHmmss}:{elevation}:{channel}";
     }
 
@@ -31,13 +31,13 @@ public class RedisRadarDataCache : IRadarDataCache {
         return $"{PVOLKeyPrefix}{timestamp:yyyyMMddHHmmss}";
     }
 
-    public async Task<byte[]?> GetImageAsync(DateTime timestamp, float elevation, Channel channel, CancellationToken cancellationToken = default) {
+    public async Task<byte[]?> GetImageAsync(DateTime timestamp, double elevation, Channel channel, CancellationToken cancellationToken = default) {
         var key = GetImageKey(timestamp, elevation, channel);
         var value = await _database.StringGetAsync(key);
         return value.HasValue ? (byte[]?)value : null;
     }
 
-    public async Task SetImageAsync(DateTime timestamp, float elevation, Channel channel, byte[] imageData, CancellationToken cancellationToken = default) {
+    public async Task SetImageAsync(DateTime timestamp, double elevation, Channel channel, byte[] imageData, CancellationToken cancellationToken = default) {
         var key = GetImageKey(timestamp, elevation, channel);
         await _database.StringSetAsync(key, imageData, _defaultTtl);
     }
@@ -58,7 +58,7 @@ public class RedisRadarDataCache : IRadarDataCache {
         }
     }
 
-    public async Task SetProcessedPVOLAsync(DateTime timestamp, float[] elevations, CancellationToken cancellationToken = default) {
+    public async Task SetProcessedPVOLAsync(DateTime timestamp, double[] elevations, CancellationToken cancellationToken = default) {
         var metadata = new ProcessedPVOLMetadata {
             Timestamp = timestamp,
             Elevations = elevations,
@@ -86,7 +86,7 @@ public class RedisRadarDataCache : IRadarDataCache {
         return timestamps;
     }
 
-    public async Task<bool> HasImageAsync(DateTime timestamp, float elevation, Channel channel, CancellationToken cancellationToken = default) {
+    public async Task<bool> HasImageAsync(DateTime timestamp, double elevation, Channel channel, CancellationToken cancellationToken = default) {
         var key = GetImageKey(timestamp, elevation, channel);
         return await _database.KeyExistsAsync(key);
     }

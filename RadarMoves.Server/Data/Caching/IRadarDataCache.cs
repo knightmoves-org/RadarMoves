@@ -5,17 +5,16 @@ namespace RadarMoves.Server.Data.Caching;
 /// <summary>
 /// Interface for caching processed radar data (Geo images, processed PVOLs)
 /// </summary>
-public interface IRadarDataCache
-{
+public interface IRadarDataCache {
     /// <summary>
     /// Get cached image for a specific timestamp, elevation, and channel
     /// </summary>
-    Task<byte[]?> GetImageAsync(DateTime timestamp, float elevation, Channel channel, CancellationToken cancellationToken = default);
+    Task<byte[]?> GetImageAsync(DateTime timestamp, double elevation, Channel channel, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Cache an image for a specific timestamp, elevation, and channel
     /// </summary>
-    Task SetImageAsync(DateTime timestamp, float elevation, Channel channel, byte[] imageData, CancellationToken cancellationToken = default);
+    Task SetImageAsync(DateTime timestamp, double elevation, Channel channel, byte[] imageData, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Get metadata about a processed PVOL (list of elevations that have been processed)
@@ -25,7 +24,7 @@ public interface IRadarDataCache
     /// <summary>
     /// Mark a PVOL as processed with its elevation angles
     /// </summary>
-    Task SetProcessedPVOLAsync(DateTime timestamp, float[] elevations, CancellationToken cancellationToken = default);
+    Task SetProcessedPVOLAsync(DateTime timestamp, double[] elevations, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Get all processed PVOL timestamps
@@ -35,7 +34,7 @@ public interface IRadarDataCache
     /// <summary>
     /// Check if a specific image is cached
     /// </summary>
-    Task<bool> HasImageAsync(DateTime timestamp, float elevation, Channel channel, CancellationToken cancellationToken = default);
+    Task<bool> HasImageAsync(DateTime timestamp, double elevation, Channel channel, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Remove cached data for a specific PVOL
@@ -46,10 +45,9 @@ public interface IRadarDataCache
 /// <summary>
 /// Metadata about a processed PVOL
 /// </summary>
-public class ProcessedPVOLMetadata
-{
+public class ProcessedPVOLMetadata {
     public DateTime Timestamp { get; set; }
-    public float[] Elevations { get; set; } = Array.Empty<float>();
+    public double[] Elevations { get; set; } = Array.Empty<double>();
     public DateTime ProcessedAt { get; set; }
 }
 

@@ -139,11 +139,9 @@ public sealed class EWRDataset : IDisposable {
     /// <summary>
     /// Get all available elevation angles for a specific timestamp
     /// </summary>
-    public IReadOnlyList<float>? GetElevationAngles(DateTime timestamp) {
+    public IReadOnlyList<double>? GetElevationAngles(DateTime timestamp) {
         var volume = GetVolume(timestamp);
-        if (volume?.ElevationAngles == null) return null;
-        // Convert double to float for interface compatibility
-        return volume.ElevationAngles.Select(e => (float)e).ToList().AsReadOnly();
+        return volume?.ElevationAngles;
     }
 
     /// <summary>

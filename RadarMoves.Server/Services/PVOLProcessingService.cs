@@ -17,6 +17,7 @@ public class PVOLProcessingService : BackgroundService {
     private readonly IConfiguration _configuration;
     private readonly FileSystemWatcher? _fileWatcher;
     private readonly string _archivePath;
+    private readonly int _imageResolution;
     private readonly HashSet<DateTime> _processingPVOLs = new();
     private readonly SemaphoreSlim _processingSemaphore = new(1, 1); // Process one PVOL at a time
 
@@ -31,6 +32,8 @@ public class PVOLProcessingService : BackgroundService {
         _hubContext = hubContext;
         _logger = logger;
         _configuration = configuration;
+        // Get image resolution from configuration
+        _imageResolution = configuration.GetValue<int>("RadarData:ImageResolution", 1024);
 
         // Get archive path from configuration
         var configPath = configuration["RadarData:Path"];
@@ -188,7 +191,7 @@ public class PVOLProcessingService : BackgroundService {
                     return;
                 }
 
-                var processedElevations = new List<float>();
+                var processedElevations = new List<double>();
 
                 // Process each elevation angle in ascending order
                 foreach (var elevation in elevations.OrderBy(e => e)) {
@@ -209,7 +212,7 @@ public class PVOLProcessingService : BackgroundService {
 
                         // Generate and cache image
                         try {
-                            var imageBytes = await _dataProvider.GetImage(channel, pvolStartTime, elevation, 1024, 1024);
+                            var imageBytes = await _dataProvider.GetImage(channel, pvolStartTime, (float)elevation, _imageResolution, _imageResolution);
                             if (imageBytes != null && imageBytes.Length > 0) {
                                 await _cache.SetImageAsync(pvolStartTime, elevation, channel, imageBytes, cancellationToken);
                                 _logger.LogInformation("Cached image for {Timestamp}, {Elevation}, {Channel} ({Size} bytes)",
