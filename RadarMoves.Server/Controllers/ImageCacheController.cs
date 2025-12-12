@@ -1,4 +1,4 @@
-using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Mvc;
 using RadarMoves.Server.Services;
 
 namespace RadarMoves.Server.Controllers;
@@ -22,9 +22,9 @@ public class ImageCacheController : ControllerBase {
         try {
             var cachedImage = await _imageCacheService.GetCachedImageAsync(channel, timestamp, elevation);
             if (cachedImage == null) {
-                return NotFound(new { cached = false });
+                return NotFound(new { Cached = false });
             }
-            return Ok(new { cached = true, dataUrl = cachedImage });
+            return Ok(new { Cached = true, DataUrl = cachedImage });
         } catch (Exception ex) {
             _logger.LogError(ex, "Error getting cached image");
             return StatusCode(500, new { error = "Failed to get cached image", message = ex.Message });

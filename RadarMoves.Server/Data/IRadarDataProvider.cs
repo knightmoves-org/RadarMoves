@@ -1,4 +1,5 @@
-using RadarMoves.Server.Data;
+﻿using RadarMoves.Server.Data;
+using RadarMoves.Shared.Data;
 
 namespace RadarMoves.Server.Data;
 
@@ -24,7 +25,7 @@ public interface IRadarDataProvider {
     /// <summary>
     /// Get scan metadata for a specific timestamp and elevation
     /// </summary>
-    Task<ScanMetadata?> GetScanMetadata(DateTime timestamp, float elevationAngle);
+    Task<PolarScanMetadata?> GetScanMetadata(DateTime timestamp, float elevationAngle);
 
     /// <summary>
     /// Get data value at specific coordinates (C, T, Z, ray, bin)
@@ -35,7 +36,6 @@ public interface IRadarDataProvider {
     /// Get data value by latitude/longitude (C, T, Z, Y, X)
     /// </summary>
     Task<float?> GetValueByGeo(Channel channel, DateTime timestamp, float elevationAngle, float latitude, float longitude);
-
 
     /// <summary>
     /// Get 2D data for a specific channel, time, and elevation (C, T, Z)

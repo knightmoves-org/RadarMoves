@@ -5,6 +5,7 @@
 @using Microsoft.AspNetCore.SignalR.Client
 @using RadarMoves.Client.Services
 @using RadarMoves.Shared.Services
+@using RadarMoves.Shared.Data
 @inject IServiceProvider ServiceProvider
 @inject NavigationManager NavigationManager
 @inject ILogger<RadarViewer> Logger
@@ -63,7 +64,7 @@
 
 @code {
     private float? CurrentValue { get; set; }
-    private ScanMetadataDto? ScanMetadata { get; set; }
+    private PolarScanMetadata? ScanMetadata { get; set; }
 
     private bool IsLoading { get; set; } = true;
     private string? ErrorMessage { get; set; }
@@ -425,7 +426,7 @@
             var timestamp = ControlsService.Timestamps[ControlsService.TimeIndex];
             var elevation = ControlsService.SelectedElevation;
             var response = await
-            Http.GetFromJsonAsync<ScanMetadataDto>($"api/RadarData/scan/{Uri.EscapeDataString(timestamp)}/{elevation}");
+            Http.GetFromJsonAsync<PolarScanMetadata>($"api/RadarData/scan/{Uri.EscapeDataString(timestamp)}/{elevation}");
             if (response != null)
             {
                 ScanMetadata = response;
@@ -615,18 +616,6 @@
         public DateTime End { get; set; }
     }
 
-    public class ScanMetadataDto
-    {
-        public string Timestamp { get; set; } = "";
-        public float ElevationAngle { get; set; }
-        public int NRays { get; set; }
-        public int NBins { get; set; }
-        public float Latitude { get; set; }
-        public float Longitude { get; set; }
-        public float Height { get; set; }
-        public float RScale { get; set; }
-        public float RStart { get; set; }
-    }
 
     public class ValueResponse
     {

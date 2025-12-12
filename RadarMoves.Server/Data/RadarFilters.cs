@@ -1,7 +1,7 @@
-
+﻿
 using System.Buffers;
-using System.Runtime.CompilerServices;
 using System.Numerics;
+using System.Runtime.CompilerServices;
 
 namespace RadarMoves.Server.Data;
 
@@ -268,8 +268,6 @@ public class SpeckleRemovalFilter(float threshold = 0.0f, int minArea = 5) : IRa
     }
 }
 
-
-
 public class GaussianFilter : IRadarFilter<float> {
     private readonly float[] _kernel;
     private readonly int _radius;
@@ -375,7 +373,6 @@ public class GaussianFilter : IRadarFilter<float> {
 
     private void VerticalPass(Span2D<float> input, Span2D<float> output) {
         var (rows, cols) = input.Shape();
-
 
         for (int x = 0; x < cols; x++) {
             for (int y = 0; y < rows; y++) {

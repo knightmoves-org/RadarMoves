@@ -1,10 +1,10 @@
-using System.IO;
+﻿using System.IO;
 using System.Xml.Linq;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
-using SixLabors.ImageSharp.Drawing.Processing;
-using SixLabors.ImageSharp.Processing;
 using SixLabors.Fonts;
+using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.Drawing.Processing;
+using SixLabors.ImageSharp.PixelFormats;
+using SixLabors.ImageSharp.Processing;
 
 namespace RadarMoves.Server.Data;
 
@@ -56,7 +56,6 @@ public class ImageWriter(float[,] data) {
     public readonly float[,] Data = data;
     public int Height => Data.GetLength(0);
     public int Width => Data.GetLength(1);
-
 
     // Simple Jet-style colormap (blue → green → yellow → red)
     private static Rgba32 JetColor(float t) {
@@ -576,8 +575,6 @@ public class ImageWriter(float[,] data) {
         image.SaveAsPng(memoryStream);
         return memoryStream.ToArray();
     }
-
-
 
     public void SaveSVG(string filePath, int cellSize = 5, bool includeColorBar = true,
         float? radarLat = null, float? radarLon = null, EWRPolarScan.GridSpec? gridSpec = null) {

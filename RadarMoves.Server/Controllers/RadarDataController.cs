@@ -1,7 +1,9 @@
+﻿using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Mvc;
 using RadarMoves.Server.Data;
 using RadarMoves.Server.Services;
-using System.Text.Json;
+using RadarMoves.Shared.Data;
 
 namespace RadarMoves.Server.Controllers;
 
@@ -83,17 +85,7 @@ public class RadarDataController(IRadarDataProvider dataProvider, ILogger<RadarD
                 return NotFound(new { error = "Scan not found" });
             }
 
-            return Ok(new {
-                timestamp = metadata.Timestamp.ToString("yyyy-MM-ddTHH:mm:ss"),
-                elevationAngle = metadata.ElevationAngle,
-                nRays = metadata.NRays,
-                nBins = metadata.NBins,
-                latitude = metadata.Latitude,
-                longitude = metadata.Longitude,
-                height = metadata.Height,
-                rScale = metadata.RScale,
-                rStart = metadata.RStart
-            });
+            return Ok(metadata.ToJson());
         } catch (Exception ex) {
             _logger.LogError(ex, "Error getting scan metadata for timestamp {Timestamp}, elevation {Elevation}", timestamp, elevation);
             return StatusCode(500, new { error = "Failed to get scan metadata", message = ex.Message });
@@ -150,6 +142,23 @@ public class RadarDataController(IRadarDataProvider dataProvider, ILogger<RadarD
             _logger.LogError(ex, "Error getting geo value");
             return StatusCode(500, new { error = "Failed to get geo value", message = ex.Message });
         }
+    }
+    private async Task<(T? data, ObjectResult? err)> HandleGetData<T>(Func<Channel, DateTime, float, Task<T?>> getData, string channel, string timestamp, float elevation) where T : class {
+        (T? data, ObjectResult? error) r = (null, null);
+        if (!Enum.TryParse<Channel>(channel, true, out var ch)) {
+            r.error = BadRequest(new { error = "Invalid channel" });
+        } else if (!DateTime.TryParse(timestamp, out var dt)) {
+            r.error = BadRequest(new { error = "Invalid timestamp format" });
+        } else {
+            var data = await getData(ch, dt, elevation);
+            if (data == null) {
+                r.error = NotFound(new { error = "Data not found" });
+            } else {
+                r.data = data;
+            }
+        }
+        return r;
+
     }
 
     /// <summary>

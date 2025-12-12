@@ -1,12 +1,11 @@
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using System.Globalization;
+using System.IO.MemoryMappedFiles;
 using System.Numerics;
 using PureHDF;
 using PureHDF.VOL.Native;
-using System.IO.MemoryMappedFiles;
+using RadarMoves.Shared.Data;
 using static System.Math;
-
-
 
 namespace RadarMoves.Server.Data;
 public enum Channel {
@@ -15,7 +14,6 @@ public enum Channel {
     RadialVelocity,// data3 # VRADH
     SpectralWidth  // data4 # WRADH
 }
-
 
 public static class IH5GroupExtensions {
     // Example: Get an attribute as a typed value
@@ -113,7 +111,6 @@ public static class IH5GroupExtensions {
     }
 }
 
-
 // Opera Data Information Model (ODIM) HDF5 dataset
 public sealed class EWRPolarScan : IDisposable, IRadarDataset<float> {
     // ------------------------------------------------------------------------------------------------------------- //
@@ -151,18 +148,19 @@ public sealed class EWRPolarScan : IDisposable, IRadarDataset<float> {
     }
     public readonly record struct GeodeticCoordinates(double[,] latitude, double[,] longitude, double[,] height, (float latMin, float latMax, float lonMin, float lonMax) bounds);
 
-
     // ------------------------------------------------------------------------------------------------------------- //
     private readonly NativeFile _file;
-    public readonly DateTime Datetime;
-    public readonly double Height;
-    public readonly double Latitude;
-    public readonly double Longitude;
-    public readonly int NRays;
-    public readonly int NBins;
-    public readonly double ElevationAngle;
-    public readonly double RScale;
-    public readonly double RStart;
+    public readonly PolarScanMetadata Metadata;
+    public DateTime Datetime => Metadata.Timestamp;
+    public DateTime Timestamp => Metadata.Timestamp;
+    public double Height => Metadata.Height;
+    public double Latitude => Metadata.Latitude;
+    public double Longitude => Metadata.Longitude;
+    public int NRays => Metadata.NRays;
+    public int NBins => Metadata.NBins;
+    public double ElevationAngle => Metadata.ElevationAngle;
+    public double RScale => Metadata.RScale;
+    public double RStart => Metadata.RStart;
     public readonly float A1GateDeg;
     public readonly float[] Azimuths;
     private readonly float[][,] _raw;
@@ -193,27 +191,27 @@ public sealed class EWRPolarScan : IDisposable, IRadarDataset<float> {
     public EWRPolarScan(NativeFile file) {
         _file = file;
         IH5Group where, what, how, root;
-
+        Metadata = new PolarScanMetadata { };
         where = file.Group("where");
-        Latitude = where.GetAttribute<double>("lat");
-        Longitude = where.GetAttribute<double>("lon");
-        Height = where.GetAttribute<double>("height");
+        Metadata.Latitude = where.GetAttribute<double>("lat");
+        Metadata.Longitude = where.GetAttribute<double>("lon");
+        Metadata.Height = where.GetAttribute<double>("height");
 
         what = file.Group("what");
         string date = what.GetAttribute<string>("date");
         string time = what.GetAttribute<string>("time");
-        Datetime = DateTime.ParseExact($"{date}{time}", "yyyyMMddHHmmss", CultureInfo.InvariantCulture);
+        Metadata.Timestamp = DateTime.ParseExact($"{date}{time}", "yyyyMMddHHmmss", CultureInfo.InvariantCulture);
 
         root = file.Group("dataset1");
         where = root.Group("where");
 
         // Read nrays and nbins using the actual HDF5 data type
-        NRays = where.GetAttributeAsInt("nrays");
-        NBins = where.GetAttributeAsInt("nbins");
+        Metadata.NRays = where.GetAttributeAsInt("nrays");
+        Metadata.NBins = where.GetAttributeAsInt("nbins");
 
-        ElevationAngle = where.GetAttribute<double>("elangle");
-        RScale = where.GetAttribute<double>("rscale");
-        RStart = where.GetAttribute<double>("rstart");
+        Metadata.ElevationAngle = where.GetAttribute<double>("elangle");
+        Metadata.RScale = where.GetAttribute<double>("rscale");
+        Metadata.RStart = where.GetAttribute<double>("rstart");
 
         how = root.Group("how");
         double[] startAz = how.GetAttribute<double[]>("startazA");
@@ -252,8 +250,6 @@ public sealed class EWRPolarScan : IDisposable, IRadarDataset<float> {
         }
         _cachedGeodetic = null;
     }
-
-
 
     // ------------------------------------------------------------------------------------------------------------- //
     // SIMD-optimized ground range
@@ -309,7 +305,6 @@ public sealed class EWRPolarScan : IDisposable, IRadarDataset<float> {
         }
     }
 
-
     /// <summary>
     /// Compute geodetic coordinates (lat/lon/height) for each bin.
     /// Parallelized across rays. The result is cached on first call.
@@ -322,8 +317,6 @@ public sealed class EWRPolarScan : IDisposable, IRadarDataset<float> {
         var latitude = new double[NRays, NBins];
         var longitude = new double[NRays, NBins];
         var height = new double[NRays, NBins];
-
-
 
         double lat0 = Deg2Rad(Latitude);
         double lon0 = Deg2Rad(Longitude);
@@ -408,12 +401,10 @@ public sealed class EWRPolarScan : IDisposable, IRadarDataset<float> {
         return _cachedGeodetic.Value;
     }
 
-
     /// <summary>
     /// Special nodata value used to mark pixels outside radar coverage bounds (rendered as black).
     /// NaN is used for other nodata cases (rendered as transparent).
     /// </summary>
-
 
     public (float[,] raster, float[,] latitudes, float[,] longitudes) InterpolateIDW(
         float[,] radarData,
@@ -431,8 +422,6 @@ public sealed class EWRPolarScan : IDisposable, IRadarDataset<float> {
                 (float)(Longitude - span), (float)(Longitude + span),
                 (float)(Latitude - span), (float)(Latitude + span), 1500, 1500);
         }
-
-
 
         int width = gs.Width;
         int height = gs.Height;
@@ -539,11 +528,9 @@ public sealed class EWRPolarScan : IDisposable, IRadarDataset<float> {
             (local) => { /* no-op */ }
         );
 
-
         (float[,] raster, float[,] latitudes, float[,] longitudes, float[,] weights, int[,] counts) final = (
             new float[height, width], new float[height, width], new float[height, width], new float[height, width], new int[height, width]
         );
-
 
         // Initialize final lat/lon to NaN
         for (int y = 0; y < height; y++) {
@@ -655,6 +642,5 @@ public sealed class EWRPolarScan : IDisposable, IRadarDataset<float> {
 
         return output;
     }
-
 
 }

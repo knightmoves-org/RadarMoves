@@ -1,6 +1,6 @@
-using StackExchange.Redis;
-using System.Text.Json;
+﻿using System.Text.Json;
 using RadarMoves.Server.Data;
+using StackExchange.Redis;
 
 namespace RadarMoves.Server.Data.Caching;
 
@@ -35,7 +35,6 @@ public class RedisRadarDataCache(IConnectionMultiplexer multiplexer, ILogger<Red
         var key = GetImageKey(timestamp, elevation, channel);
         await _database.StringSetAsync(key, imageData, _defaultTtl);
     }
-
 
     public async Task<ProcessedPVOLMetadata?> GetProcessedPVOLAsync(DateTime timestamp, CancellationToken cancellationToken = default) {
         var key = GetPVOLKey(timestamp);

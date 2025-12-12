@@ -147,7 +147,8 @@ file_header_template = Licensed to the .NET Foundation under one or more agreeme
 
 # RS0016: Only enable if API files are present
 dotnet_public_api_analyzer.require_api_files = true
-
+# Enforce no multiple blank lines in a row
+dotnet_diagnostic.IDE2000.severity = warning
 # IDE0055: Fix formatting
 # Workaround for https://github.com/dotnet/roslyn/issues/70570
 dotnet_diagnostic.IDE0055.severity = warning
@@ -187,4 +188,8 @@ csharp_indent_case_contents = true
 csharp_indent_case_contents_when_block = true
 csharp_indent_switch_labels = true
 csharp_indent_labels = flush_left
+
+# Example of a direct clang-format property mapping:
+clang_format_AllowShortIfStatementsOnASingleLine = Never
+clang_format_BreakBeforeBraces = Linux 
 

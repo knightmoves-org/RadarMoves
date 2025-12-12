@@ -1,4 +1,4 @@
-// using System.Collections;
+﻿// using System.Collections;
 // using System.Collections.Generic;
 // using StackExchange.Redis;
 // using StackExchange.Redis;
@@ -7,8 +7,6 @@
 // using System.Collections.Generic;
 // using System.Linq;
 // using System.Threading.Tasks;
-
-
 
 // // Corresponds to Python's collections.abc.Mapping
 // namespace RadarMoves.Server.Data;
@@ -134,8 +132,6 @@
 //     }
 // }
 
-
-
 // // A custom Async Mapping interface (No longer inherits IReadOnlyDictionary)
 // public interface IAsyncMapping<K, V> {
 //     // The indexer must remain synchronous in C# syntax, but the implementation will use async calls internally
@@ -155,7 +151,6 @@
 //     Task SetManyAsync(IDictionary<K, V> items);
 //     // AddAsync, ClearAsync, etc.
 // }
-
 
 // public class AsyncRedisMapping<K, V> : IAsyncMutableMapping<K, V> {
 //     private readonly IDatabase _database;

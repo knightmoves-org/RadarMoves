@@ -1,17 +1,14 @@
-using RadarMoves.Server.Data;
-
+﻿using RadarMoves.Server.Data;
 
 namespace RadarMoves.Test;
 
-
 public class DatasetTests {
-    public static readonly string ROOT = Path.Combine(Directory.GetCurrentDirectory(), "..", "..", "..", "..");
-    public static readonly string DATA_ROOT = Path.Combine(ROOT, "data");
-    public static readonly string EWR_ROOT = Path.Combine(DATA_ROOT, "ewr", "samples");
-    public static readonly string DOCUMENTS = Path.Combine(ROOT, "Documents");
-    public static readonly string IMAGES = Path.Combine(DOCUMENTS, "Images");
-
-
+    public static readonly string ROOT_FILE_PATH = Path.Combine(Directory.GetCurrentDirectory(), "..", "..", "..", "..");
+    public static readonly string TEST_FILE_PATH = Path.Combine(ROOT_FILE_PATH, "RadarMoves.Test");
+    public static readonly string DATA_FILE_PATH = Path.Combine(TEST_FILE_PATH, "Data");
+    public static readonly string SCAN_FILE = Path.Combine(DATA_FILE_PATH, "Ewr", "Scan", "EWR250524024456.h5");
+    public static readonly string DOCUMENT_FILE_PATH = Path.Combine(ROOT_FILE_PATH, "Documents");
+    public static readonly string IMAGES_FILE_PATH = Path.Combine(DOCUMENT_FILE_PATH, "Images");
 
     [Fact]
     public void EarthRadiusConstant_ShouldBeCorrect() {
@@ -28,10 +25,10 @@ public class DatasetTests {
         ImageWriter writer;
         DateTime endBenchmark;
         DateTime startBenchmark;
-        int height = 1024;
+        int height = 512;
         int width = 1024;
-        var filename = Path.Combine(EWR_ROOT, "EWR250524024617.h5");
-        var ds = new EWRPolarScan(filename);
+        // var filename = Path.Combine(EWR_ROOT, "EWR250524024617.h5");
+        var ds = new EWRPolarScan(SCAN_FILE);
 
         var groundRange = ds.GroundRange();
 
@@ -41,19 +38,15 @@ public class DatasetTests {
         double radarLon = ds.Longitude;
         var (latitude, longitude, _, (latMin, latMax, lonMin, lonMax)) = ds.GetGeodeticCoordinates();
 
-
-
-
         EWRPolarScan.GridSpec gridSpec = new(lonMin, lonMax, latMin, latMax, width, height);
         foreach (var k in ds.Keys) {
             var raw = ds.Raw[(int)k];
             writer = new(raw);
-            writer.SavePNG(Path.Combine(IMAGES, $"Raw{k}.png"), channel: k, includeColorBar: true);
+            writer.SavePNG(Path.Combine(IMAGES_FILE_PATH, $"Raw{k}.png"), channel: k, includeColorBar: true);
             var filtered = ds[k];
             writer = new(filtered);
-            writer.SavePNG(Path.Combine(IMAGES, $"Filtered{k}.png"), channel: k, includeColorBar: true);
+            writer.SavePNG(Path.Combine(IMAGES_FILE_PATH, $"Filtered{k}.png"), channel: k, includeColorBar: true);
         }
-
 
         for (int i = 0; i < ds.Keys.Count(); i++) {
             var key = ds.Keys.ElementAt(i);
@@ -69,7 +62,7 @@ public class DatasetTests {
 
             // --------- test that the latitudes and longitudes are in the correct order
 
-            var outfile = Path.Combine(IMAGES, $"Projected{key}.png");
+            var outfile = Path.Combine(IMAGES_FILE_PATH, $"Projected{key}.png");
             writer = new(projected);
             writer.SavePNG(outfile, channel: key, includeColorBar: true,
                 radarLat: (float)radarLat, radarLon: (float)radarLon, gridSpec: gridSpec);
@@ -80,8 +73,7 @@ public class DatasetTests {
     public void ToRaster_LatLonOrder_ShouldBeCorrect() {
         // Arrange
 
-        var filename = Path.Combine(EWR_ROOT, "EWR250524024617.h5");
-        var ds = new EWRPolarScan(filename);
+        var ds = new EWRPolarScan(SCAN_FILE);
         float[,] radarMoment = ds[Channel.Reflectivity];
 
         int height = 256;

@@ -1,4 +1,4 @@
-namespace RadarMoves.Server.Data;
+﻿namespace RadarMoves.Server.Data;
 
 public interface IRadarFilter<T> where T : unmanaged {
     abstract void Apply(Span2D<T> grid);
@@ -6,6 +6,4 @@ public interface IRadarFilter<T> where T : unmanaged {
     public void Invoke(T[,] grid) => Apply(grid.AsSpan());
 
 }
-
-
 

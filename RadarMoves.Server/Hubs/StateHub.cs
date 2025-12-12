@@ -1,13 +1,12 @@
-using Microsoft.AspNetCore.SignalR;
-using StackExchange.Redis;
+﻿using Microsoft.AspNetCore.SignalR;
 using RadarMoves.Shared;
+using StackExchange.Redis;
 
 namespace RadarMoves.Server.Hubs;
 
 public class StateHub(IConnectionMultiplexer multiplexer) : Hub {
 
     private readonly IDatabase _db = multiplexer.GetDatabase();
-
 
     public async Task SetState(State state) {
         if (state.UserState == null) {

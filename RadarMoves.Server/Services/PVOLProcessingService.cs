@@ -1,4 +1,4 @@
-using Microsoft.AspNetCore.SignalR;
+﻿using Microsoft.AspNetCore.SignalR;
 using RadarMoves.Server.Data;
 using RadarMoves.Server.Data.Caching;
 using RadarMoves.Server.Hubs;

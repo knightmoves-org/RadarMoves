@@ -1,6 +1,7 @@
-using System.Globalization;
+﻿using System.Globalization;
 using PureHDF;
 using PureHDF.VOL.Native;
+using RadarMoves.Shared.Data;
 
 namespace RadarMoves.Server.Data;
 
@@ -61,7 +62,7 @@ public class ArchiveRadarDataProvider : IRadarDataProvider {
         return data.Angles;
     }
 
-    public async Task<ScanMetadata?> GetScanMetadata(DateTime timestamp, float elevationAngle) {
+    public async Task<PolarScanMetadata?> GetScanMetadata(DateTime timestamp, float elevationAngle) {
         var filePath = await FindScanByElevation(timestamp, elevationAngle);
         if (filePath == null) {
             _logger.LogWarning("No matching elevation found for timestamp {Timestamp}, elevation {Elevation}",
@@ -70,7 +71,7 @@ public class ArchiveRadarDataProvider : IRadarDataProvider {
         }
 
         using var scan = new EWRPolarScan(filePath);
-        return new ScanMetadata {
+        return new PolarScanMetadata {
             Timestamp = scan.Datetime,
             ElevationAngle = scan.ElevationAngle,
             NRays = scan.NRays,

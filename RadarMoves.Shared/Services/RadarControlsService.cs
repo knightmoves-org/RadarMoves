@@ -1,15 +1,11 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
-
-namespace RadarMoves.Shared.Services;
+﻿namespace RadarMoves.Shared.Services;
 
 public class RadarControlsService {
-    public List<string> Timestamps { get; set; } = new();
-    public List<float> ElevationAngles { get; set; } = new();
-    public List<string> AvailableChannels { get; set; } = new() { "Reflectivity", "RadialVelocity", "SpectralWidth", "TotalPower" };
-    public List<string> AvailableViewTypes { get; set; } = new() { "Radar", "Raw Data", "Filtered Data" };
-    
+    public List<string> Timestamps { get; set; } = [];
+    public List<float> ElevationAngles { get; set; } = [];
+    public List<string> AvailableChannels { get; set; } = ["Reflectivity", "RadialVelocity", "SpectralWidth", "TotalPower"];
+    public List<string> AvailableViewTypes { get; set; } = ["Radar", "Raw Data", "Filtered Data"];
+
     public string SelectedChannel { get; set; } = "Reflectivity";
     public string SelectedViewType { get; set; } = "Radar";
     public int TimeIndex { get; set; } = 0;

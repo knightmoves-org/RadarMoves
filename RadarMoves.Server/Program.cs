@@ -1,14 +1,14 @@
-using Microsoft.AspNetCore.ResponseCompression;
+﻿using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Components.Server.ProtectedBrowserStorage;
-using StackExchange.Redis;
-using System.Text.Json.Serialization;
-
+using Microsoft.AspNetCore.ResponseCompression;
+using Microsoft.Extensions.Caching.Memory;
 using RadarMoves.Server.Components;
-using RadarMoves.Server.Services;
-using RadarMoves.Server.Hubs;
 using RadarMoves.Server.Data;
 using RadarMoves.Server.Data.Caching;
+using RadarMoves.Server.Hubs;
+using RadarMoves.Server.Services;
 using RadarMoves.Shared.Services;
+using StackExchange.Redis;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -66,7 +66,33 @@ builder.Services.AddSingleton<IRadarDataProvider>(sp => {
 });
 
 builder.Services.AddSingleton<RadarDatasetService>();
-builder.Services.AddScoped<RadarMoves.Server.Services.ImageCacheService>();
+
+// ===========================================================================================
+// SESSION STATE CONFIGURATION
+// ===========================================================================================
+
+// Add distributed memory cache as backing store for session state
+// This enables session state to work in API controllers
+builder.Services.AddDistributedMemoryCache();
+
+// Configure session state
+builder.Services.AddSession(options => {
+    options.IdleTimeout = TimeSpan.FromMinutes(20); // Default session timeout
+    options.Cookie.HttpOnly = true; // Prevent JavaScript access for security
+    options.Cookie.IsEssential = true; // Mark as essential for GDPR compliance
+    options.Cookie.SameSite = SameSiteMode.Lax; // Allow cross-site requests
+});
+
+builder.Services.AddMemoryCache(); // Keep IMemoryCache for other uses
+
+// Register ImageCacheService with factory to handle HttpContext access
+builder.Services.AddScoped<RadarMoves.Server.Services.ImageCacheService>(sp => {
+    var httpContextAccessor = sp.GetRequiredService<IHttpContextAccessor>();
+    var logger = sp.GetRequiredService<ILogger<RadarMoves.Server.Services.ImageCacheService>>();
+    var protectedSessionStorage = sp.GetService<Microsoft.AspNetCore.Components.Server.ProtectedBrowserStorage.ProtectedSessionStorage>();
+
+    return new RadarMoves.Server.Services.ImageCacheService(httpContextAccessor, protectedSessionStorage, logger);
+});
 builder.Services.AddScoped<RadarMoves.Client.Services.ImageCacheService>();
 // Register radar controls service as singleton for shared state across components
 builder.Services.AddSingleton<RadarControlsService>();
@@ -151,10 +177,17 @@ if (app.Environment.IsDevelopment()) {
     app.UseHsts();
 }
 
-
 app.UseHttpsRedirection();
 
+// Configure routing - required before UseSession
+app.UseRouting();
+
+// Use antiforgery middleware - must be after UseRouting and before UseSession
 app.UseAntiforgery();
+
+// Use session middleware - must be after UseRouting and before MapControllers/MapRazorPages
+// See: https://learn.microsoft.com/en-us/aspnet/core/fundamentals/app-state?view=aspnetcore-10.0
+app.UseSession();
 
 app.MapControllers();
 
@@ -169,9 +202,6 @@ app.MapHub<RadarDataHub>("/radarDataHub");
 app.MapRazorComponents<App>()
     .AddInteractiveWebAssemblyRenderMode()
     .AddAdditionalAssemblies(typeof(RadarMoves.Client._Imports).Assembly);
-
-// Map the StateHub to the application pipeline
-// app.MapHub<StateHub>("/state");
 
 // Start the application
 app.Run();
