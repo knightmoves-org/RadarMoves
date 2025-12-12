@@ -1,15 +1,14 @@
 @page "/"
 @rendermode InteractiveWebAssembly
+@using System.Text;
 @using System.Net.Http.Json
 @using Microsoft.AspNetCore.Components
 @using Microsoft.AspNetCore.SignalR.Client
-@using RadarMoves.Client.Services
 @using RadarMoves.Shared.Services
 @using RadarMoves.Shared.Data
 @inject IServiceProvider ServiceProvider
 @inject NavigationManager NavigationManager
 @inject ILogger<RadarViewer> Logger
-@inject ImageCacheService ImageCache
 @inject RadarControlsService ControlsService
 @implements IAsyncDisposable
 @implements IDisposable
@@ -437,6 +436,28 @@
             Logger.LogError(ex, "Error loading scan metadata");
         }
     }
+    private static string Long2Short(string longName) =>
+    longName switch
+    {
+        "Raw Data" => "raw",
+        "Filtered Data" => "filtered",
+        "Radar" => "image",
+        _ => longName
+    };
+    private string GetElevationString() =>
+    ControlsService.SelectedElevation.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+    private string? GetImageUrl()
+    {
+        if (ControlsService.Timestamps.Count == 0 || ControlsService.ElevationAngles.Count == 0) return null;
+        string s = "api/RadarData";
+        s += $"/{Long2Short(ControlsService.SelectedViewType)}";
+        s += $"/{ControlsService.SelectedChannel}";
+        s += $"/{Uri.EscapeDataString(ControlsService.Timestamps[ControlsService.TimeIndex])}";
+        s += $"/{GetElevationString()}";
+        return s;
+    }
+
 
     private async Task LoadValue()
     {
@@ -513,93 +534,16 @@
 
     private async Task LoadImage()
     {
-        if (Http == null) return;
-        try
+        ImageUrl = GetImageUrl();
+        if (Http == null || ImageUrl == null) return;
+        var response = await Http.GetAsync(ImageUrl);
+        if (response.IsSuccessStatusCode)
         {
-            if (ControlsService.Timestamps.Count == 0 || ControlsService.ElevationAngles.Count == 0)
-            {
-                ImageUrl = null;
-                return;
-            }
-
-            var timestamp = ControlsService.Timestamps[ControlsService.TimeIndex];
-            var elevation = ControlsService.SelectedElevation;
-
-            if (elevation <= 0 || ControlsService.ElevationIndex < 0 || ControlsService.ElevationIndex >=
-            ControlsService.ElevationAngles.Count)
-            {
-                ImageUrl = null;
-                return;
-            }
-
-            // Determine API endpoint based on view type
-            string imageUrl;
-            if (ControlsService.SelectedViewType == "Raw Data")
-            {
-                var elevationStr = elevation.ToString(System.Globalization.CultureInfo.InvariantCulture);
-                imageUrl =
-                $"api/RadarData/raw/{ControlsService.SelectedChannel}/{Uri.EscapeDataString(timestamp)}/{elevationStr}?t={DateTime.Now.Ticks}";
-                ImageUrl = imageUrl;
-                return;
-            }
-            else if (ControlsService.SelectedViewType == "Filtered Data")
-            {
-                var elevationStr = elevation.ToString(System.Globalization.CultureInfo.InvariantCulture);
-                imageUrl =
-                $"api/RadarData/filtered/{ControlsService.SelectedChannel}/{Uri.EscapeDataString(timestamp)}/{elevationStr}?t={DateTime.Now.Ticks}";
-                ImageUrl = imageUrl;
-                return;
-            }
-            else // Radar view
-            {
-                // Check cache first
-                var cachedImage = await ImageCache.GetCachedImageAsync(ControlsService.SelectedChannel, timestamp, elevation);
-                if (cachedImage != null)
-                {
-                    ImageUrl = cachedImage;
-                    Logger.LogDebug("Using cached image for {Channel}/{Timestamp}/{Elevation}", ControlsService.SelectedChannel, timestamp,
-                    elevation);
-                    return;
-                }
-
-                // Not in cache, fetch from server
-                imageUrl = $"api/RadarData/image/{ControlsService.SelectedChannel}/{Uri.EscapeDataString(timestamp)}/{elevation}";
-
-                try
-                {
-                    var response = await Http.GetAsync(imageUrl);
-                    if (response.IsSuccessStatusCode)
-                    {
-                        var imageBytes = await response.Content.ReadAsByteArrayAsync();
-
-                        // Store in cache for future use
-                        await ImageCache.CacheImageAsync(ControlsService.SelectedChannel, timestamp, elevation, imageBytes);
-
-                        // Convert to data URL for display
-                        var base64 = Convert.ToBase64String(imageBytes);
-                        ImageUrl = $"data:image/png;base64,{base64}";
-
-                        Logger.LogDebug("Fetched and cached image for {Channel}/{Timestamp}/{Elevation} ({Size} bytes)",
-                        ControlsService.SelectedChannel, timestamp, elevation, imageBytes.Length);
-                    }
-                    else
-                    {
-                        Logger.LogWarning("Failed to fetch image: {StatusCode}", response.StatusCode);
-                        ImageUrl = null;
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Logger.LogError(ex, "Error fetching image from server");
-                    ImageUrl = null;
-                }
-            }
+            var imageBytes = await response.Content.ReadAsByteArrayAsync();
+            var base64 = Convert.ToBase64String(imageBytes);
+            ImageUrl = $"data:image/png;base64,{base64}";
         }
-        catch (Exception ex)
-        {
-            Logger.LogError(ex, "Error loading image");
-            ImageUrl = null;
-        }
+
     }
 
     // DTOs
